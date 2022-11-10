@@ -52,7 +52,7 @@ struct kvm_mmu_page {
 	struct list_head link;
 	struct hlist_node hash_link;
 
-	bool tdp_mmu_page;
+	bool shadow_mmu_page;
 	bool unsync;
 	u8 mmu_valid_gen;
 
