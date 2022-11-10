@@ -270,7 +270,7 @@ static struct kvm_mmu_page *tdp_mmu_alloc_sp(struct kvm_vcpu *vcpu)
 static void tdp_mmu_init_sp(struct kvm_mmu_page *sp, tdp_ptep_t sptep,
 			    gfn_t gfn, union kvm_mmu_page_role role)
 {
-	INIT_LIST_HEAD(&sp->possible_nx_huge_page_link);
+	INIT_LIST_HEAD(&sp->arch.possible_nx_huge_page_link);
 
 	set_page_private(virt_to_page(sp->spt), (unsigned long)sp);
 
@@ -385,7 +385,7 @@ static void tdp_mmu_unlink_sp(struct kvm *kvm, struct kvm_mmu_page *sp,
 {
 	tdp_unaccount_mmu_page(kvm, sp);
 
-	if (!sp->nx_huge_page_disallowed)
+	if (!sp->arch.nx_huge_page_disallowed)
 		return;
 
 	if (shared)
@@ -393,7 +393,7 @@ static void tdp_mmu_unlink_sp(struct kvm *kvm, struct kvm_mmu_page *sp,
 	else
 		lockdep_assert_held_write(&kvm->mmu_lock);
 
-	sp->nx_huge_page_disallowed = false;
+	sp->arch.nx_huge_page_disallowed = false;
 	untrack_possible_nx_huge_page(kvm, sp);
 
 	if (shared)
@@ -1181,7 +1181,7 @@ int kvm_tdp_mmu_map(struct kvm_vcpu *vcpu, struct kvm_page_fault *fault)
 		sp = tdp_mmu_alloc_sp(vcpu);
 		tdp_mmu_init_child_sp(sp, &iter);
 
-		sp->nx_huge_page_disallowed = fault->huge_page_disallowed;
+		sp->arch.nx_huge_page_disallowed = fault->huge_page_disallowed;
 
 		if (is_shadow_present_pte(iter.old_spte))
 			r = tdp_mmu_split_huge_page(kvm, &iter, sp, true);

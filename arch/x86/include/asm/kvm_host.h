@@ -329,10 +329,6 @@ union kvm_cpu_role {
 	};
 };
 
-struct kvm_rmap_head {
-	unsigned long val;
-};
-
 struct kvm_pio_request {
 	unsigned long linear_rip;
 	unsigned long count;

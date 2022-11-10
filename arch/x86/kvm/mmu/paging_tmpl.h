@@ -671,7 +671,7 @@ static int FNAME(fetch)(struct kvm_vcpu *vcpu, struct kvm_page_fault *fault,
 			 * KVM_REQ_MMU_SYNC is not necessary but it
 			 * expedites the process.
 			 */
-			if (sp->unsync_children &&
+			if (sp->arch.unsync_children &&
 			    mmu_sync_children(vcpu, sp, false))
 				return RET_PF_RETRY;
 		}
@@ -921,7 +921,7 @@ static void FNAME(invlpg)(struct kvm_vcpu *vcpu, gva_t gva, hpa_t root_hpa)
 			pt_element_t gpte;
 			gpa_t pte_gpa;
 
-			if (!sp->unsync)
+			if (!sp->arch.unsync)
 				break;
 
 			pte_gpa = FNAME(get_level1_sp_gpa)(sp);
@@ -942,7 +942,7 @@ static void FNAME(invlpg)(struct kvm_vcpu *vcpu, gva_t gva, hpa_t root_hpa)
 			FNAME(prefetch_gpte)(vcpu, sp, sptep, gpte, false);
 		}
 
-		if (!sp->unsync_children)
+		if (!sp->arch.unsync_children)
 			break;
 	}
 	write_unlock(&vcpu->kvm->mmu_lock);
@@ -974,8 +974,8 @@ static gpa_t FNAME(gva_to_gpa)(struct kvm_vcpu *vcpu, struct kvm_mmu *mmu,
 }
 
 /*
- * Using the information in sp->shadowed_translation (kvm_mmu_page_get_gfn()) is
- * safe because:
+ * Using the information in sp->arch.shadowed_translation
+ * (kvm_mmu_page_get_gfn()) is safe because:
  * - The spte has a reference to the struct page, so the pfn for a given gfn
  *   can't change unless all sptes pointing to it are nuked first.
  *

@@ -16,11 +16,11 @@
 	__field(bool, unsync)
 
 #define KVM_MMU_PAGE_ASSIGN(sp)				\
-	__entry->mmu_valid_gen = sp->mmu_valid_gen;	\
+	__entry->mmu_valid_gen = sp->arch.mmu_valid_gen;	\
 	__entry->gfn = sp->gfn;				\
 	__entry->role = sp->role.word;			\
 	__entry->root_count = refcount_read(&sp->root_refcount);	\
-	__entry->unsync = sp->unsync;
+	__entry->unsync = sp->arch.unsync;
 
 #define KVM_MMU_PAGE_PRINTK() ({				        \
 	const char *saved_ptr = trace_seq_buffer_ptr(p);		\

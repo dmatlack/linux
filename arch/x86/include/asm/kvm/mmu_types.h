@@ -2,6 +2,8 @@
 #ifndef __ASM_KVM_MMU_TYPES_H
 #define __ASM_KVM_MMU_TYPES_H
 
+#include <linux/bitmap.h>
+#include <linux/list.h>
 #include <linux/types.h>
 
 /*
@@ -51,6 +53,66 @@ struct kvm_mmu_page_role_arch {
 	u16 ad_disabled:1;
 	u16 guest_mode:1;
 	u16 passthrough:1;
+};
+
+struct kvm_rmap_head {
+	unsigned long val;
+};
+
+struct kvm_mmu_page_arch {
+	struct hlist_node hash_link;
+
+	bool shadow_mmu_page;
+	bool unsync;
+	u8 mmu_valid_gen;
+
+	 /*
+	  * The shadow page can't be replaced by an equivalent huge page
+	  * because it is being used to map an executable page in the guest
+	  * and the NX huge page mitigation is enabled.
+	  */
+	bool nx_huge_page_disallowed;
+
+	/*
+	 * Stores the result of the guest translation being shadowed by each
+	 * SPTE.  KVM shadows two types of guest translations: nGPA -> GPA
+	 * (shadow EPT/NPT) and GVA -> GPA (traditional shadow paging). In both
+	 * cases the result of the translation is a GPA and a set of access
+	 * constraints.
+	 *
+	 * The GFN is stored in the upper bits (PAGE_SHIFT) and the shadowed
+	 * access permissions are stored in the lower bits. Note, for
+	 * convenience and uniformity across guests, the access permissions are
+	 * stored in KVM format (e.g.  ACC_EXEC_MASK) not the raw guest format.
+	 */
+	u64 *shadowed_translation;
+
+	unsigned int unsync_children;
+
+	/* Rmap pointers to all parent sptes. */
+	struct kvm_rmap_head parent_ptes;
+
+	DECLARE_BITMAP(unsync_child_bitmap, 512);
+
+	/*
+	 * Tracks shadow pages that, if zapped, would allow KVM to create an NX
+	 * huge page.  A shadow page will have nx_huge_page_disallowed set but
+	 * not be on the list if a huge page is disallowed for other reasons,
+	 * e.g. because KVM is shadowing a PTE at the same gfn, the memslot
+	 * isn't properly aligned, etc...
+	 */
+	struct list_head possible_nx_huge_page_link;
+
+#ifdef CONFIG_X86_32
+	/*
+	 * Used out of the mmu-lock to avoid reading spte values while an
+	 * update is in progress; see the comments in __get_spte_lockless().
+	 */
+	int clear_spte_count;
+#endif
+
+	/* Number of writes since the last time traversal visited this page.  */
+	atomic_t write_flooding_count;
 };
 
 #endif /* !__ASM_KVM_MMU_TYPES_H */
