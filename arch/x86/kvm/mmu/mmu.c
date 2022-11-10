@@ -5056,7 +5056,7 @@ kvm_calc_cpu_role(struct kvm_vcpu *vcpu, const struct kvm_mmu_role_regs *regs)
 	union kvm_cpu_role role = {0};
 
 	role.base.access = ACC_ALL;
-	role.base.smm = is_smm(vcpu);
+	role.base.as_id = is_smm(vcpu);
 	role.base.guest_mode = is_guest_mode(vcpu);
 	role.ext.valid = 1;
 
@@ -5112,7 +5112,7 @@ kvm_calc_tdp_mmu_root_page_role(struct kvm_vcpu *vcpu,
 	role.access = ACC_ALL;
 	role.cr0_wp = true;
 	role.efer_nx = true;
-	role.smm = cpu_role.base.smm;
+	role.as_id = cpu_role.base.as_id;
 	role.guest_mode = cpu_role.base.guest_mode;
 	role.ad_disabled = !kvm_ad_enabled();
 	role.level = kvm_mmu_get_tdp_level(vcpu);
@@ -5233,7 +5233,7 @@ kvm_calc_shadow_ept_root_page_role(struct kvm_vcpu *vcpu, bool accessed_dirty,
 
 	/*
 	 * KVM does not support SMM transfer monitors, and consequently does not
-	 * support the "entry to SMM" control either.  role.base.smm is always 0.
+	 * support the "entry to SMM" control either.  role.base.as_id is always 0.
 	 */
 	WARN_ON_ONCE(is_smm(vcpu));
 	role.base.level = level;

@@ -133,16 +133,6 @@ struct kvm_mmu_page {
 
 extern struct kmem_cache *mmu_page_header_cache;
 
-static inline int kvm_mmu_role_as_id(union kvm_mmu_page_role role)
-{
-	return role.smm ? 1 : 0;
-}
-
-static inline int kvm_mmu_page_as_id(struct kvm_mmu_page *sp)
-{
-	return kvm_mmu_role_as_id(sp->role);
-}
-
 static inline bool kvm_mmu_page_ad_need_write_protect(struct kvm_mmu_page *sp)
 {
 	/*
