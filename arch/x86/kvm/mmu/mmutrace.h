@@ -35,13 +35,13 @@
 			 " %snxe %sad root %u %s%c",			\
 			 __entry->mmu_valid_gen,			\
 			 __entry->gfn, role.level,			\
-			 role.has_4_byte_gpte ? 4 : 8,			\
-			 role.quadrant,					\
-			 role.direct ? " direct" : "",			\
-			 access_str[role.access],			\
+			 role.arch.has_4_byte_gpte ? 4 : 8,			\
+			 role.arch.quadrant,					\
+			 role.arch.direct ? " direct" : "",			\
+			 access_str[role.arch.access],			\
 			 role.invalid ? " invalid" : "",		\
-			 role.efer_nx ? "" : "!",			\
-			 role.ad_disabled ? "!" : "",			\
+			 role.arch.efer_nx ? "" : "!",			\
+			 role.arch.ad_disabled ? "!" : "",			\
 			 __entry->root_count,				\
 			 __entry->unsync ? "unsync" : "sync", 0);	\
 	saved_ptr;							\

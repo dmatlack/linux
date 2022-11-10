@@ -37,6 +37,8 @@
 #include <asm/kvm_vcpu_regs.h>
 #include <asm/hyperv-tlfs.h>
 
+#include <kvm/mmu_types.h>
+
 #define __KVM_HAVE_ARCH_VCPU_DEBUGFS
 
 #define KVM_MAX_VCPUS 1024
@@ -285,72 +287,6 @@ enum x86_intercept_stage;
 #define KVM_APIC_PV_EOI_PENDING	1
 
 struct kvm_kernel_irq_routing_entry;
-
-/*
- * kvm_mmu_page_role tracks the properties of a shadow page (where shadow page
- * also includes TDP pages) to determine whether or not a page can be used in
- * the given MMU context.  This is a subset of the overall kvm_cpu_role to
- * minimize the size of kvm_memory_slot.arch.gfn_track, i.e. allows allocating
- * 2 bytes per gfn instead of 4 bytes per gfn.
- *
- * Upper-level shadow pages having gptes are tracked for write-protection via
- * gfn_track.  As above, gfn_track is a 16 bit counter, so KVM must not create
- * more than 2^16-1 upper-level shadow pages at a single gfn, otherwise
- * gfn_track will overflow and explosions will ensure.
- *
- * A unique shadow page (SP) for a gfn is created if and only if an existing SP
- * cannot be reused.  The ability to reuse a SP is tracked by its role, which
- * incorporates various mode bits and properties of the SP.  Roughly speaking,
- * the number of unique SPs that can theoretically be created is 2^n, where n
- * is the number of bits that are used to compute the role.
- *
- * But, even though there are 19 bits in the mask below, not all combinations
- * of modes and flags are possible:
- *
- *   - invalid shadow pages are not accounted, so the bits are effectively 18
- *
- *   - quadrant will only be used if has_4_byte_gpte=1 (non-PAE paging);
- *     execonly and ad_disabled are only used for nested EPT which has
- *     has_4_byte_gpte=0.  Therefore, 2 bits are always unused.
- *
- *   - the 4 bits of level are effectively limited to the values 2/3/4/5,
- *     as 4k SPs are not tracked (allowed to go unsync).  In addition non-PAE
- *     paging has exactly one upper level, making level completely redundant
- *     when has_4_byte_gpte=1.
- *
- *   - on top of this, smep_andnot_wp and smap_andnot_wp are only set if
- *     cr0_wp=0, therefore these three bits only give rise to 5 possibilities.
- *
- * Therefore, the maximum number of possible upper-level shadow pages for a
- * single gfn is a bit less than 2^13.
- */
-union kvm_mmu_page_role {
-	u32 word;
-	struct {
-		unsigned level:4;
-		unsigned has_4_byte_gpte:1;
-		unsigned quadrant:2;
-		unsigned direct:1;
-		unsigned access:3;
-		unsigned invalid:1;
-		unsigned efer_nx:1;
-		unsigned cr0_wp:1;
-		unsigned smep_andnot_wp:1;
-		unsigned smap_andnot_wp:1;
-		unsigned ad_disabled:1;
-		unsigned guest_mode:1;
-		unsigned passthrough:1;
-		unsigned :5;
-
-		/*
-		 * This is left at the top of the word so that
-		 * kvm_memslots_for_spte_role can extract it with a
-		 * simple shift.  While there is room, give it a whole
-		 * byte so it is also faster to load it from memory.
-		 */
-		unsigned as_id:8;
-	};
-};
 
 /*
  * kvm_mmu_extended_role complements kvm_mmu_page_role, tracking properties

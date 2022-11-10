@@ -260,7 +260,7 @@ static inline bool kvm_ad_enabled(void)
 
 static inline bool sp_ad_disabled(struct kvm_mmu_page *sp)
 {
-	return sp->role.ad_disabled;
+	return sp->role.arch.ad_disabled;
 }
 
 static inline bool spte_ad_enabled(u64 spte)
