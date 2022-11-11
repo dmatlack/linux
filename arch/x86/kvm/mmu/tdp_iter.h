@@ -106,7 +106,7 @@ struct tdp_iter {
 	     tdp_iter_next(&iter))
 
 #define for_each_tdp_pte(iter, root, start, end) \
-	for_each_tdp_pte_min_level(iter, root, PG_LEVEL_4K, start, end)
+	for_each_tdp_pte_min_level(iter, root, PG_LEVEL_PTE, start, end)
 
 tdp_ptep_t spte_to_child_pt(u64 pte, int level);
 

@@ -347,7 +347,7 @@ static void handle_changed_spte_dirty_log(struct kvm *kvm, int as_id, gfn_t gfn,
 	bool pfn_changed;
 	struct kvm_memory_slot *slot;
 
-	if (level > PG_LEVEL_4K)
+	if (level > PG_LEVEL_PTE)
 		return;
 
 	pfn_changed = spte_to_pfn(old_spte) != spte_to_pfn(new_spte);
@@ -526,7 +526,7 @@ static void __handle_changed_spte(struct kvm *kvm, int as_id, gfn_t gfn,
 	bool pfn_changed = spte_to_pfn(old_spte) != spte_to_pfn(new_spte);
 
 	WARN_ON(level > PT64_ROOT_MAX_LEVEL);
-	WARN_ON(level < PG_LEVEL_4K);
+	WARN_ON(level < PG_LEVEL_PTE);
 	WARN_ON(gfn & (KVM_PAGES_PER_HPAGE(level) - 1));
 
 	/*
@@ -897,9 +897,9 @@ static void tdp_mmu_zap_root(struct kvm *kvm, struct kvm_mmu_page *root,
 	 * inducing a stall to allow in-place replacement with a 1gb hugepage.
 	 *
 	 * Because zapping a SP recurses on its children, stepping down to
-	 * PG_LEVEL_4K in the iterator itself is unnecessary.
+	 * PG_LEVEL_PTE in the iterator itself is unnecessary.
 	 */
-	__tdp_mmu_zap_root(kvm, root, shared, PG_LEVEL_1G);
+	__tdp_mmu_zap_root(kvm, root, shared, PG_LEVEL_PUD);
 	__tdp_mmu_zap_root(kvm, root, shared, root->role.level);
 
 	rcu_read_unlock();
@@ -944,7 +944,7 @@ static bool tdp_mmu_zap_leafs(struct kvm *kvm, struct kvm_mmu_page *root,
 
 	rcu_read_lock();
 
-	for_each_tdp_pte_min_level(iter, root, PG_LEVEL_4K, start, end) {
+	for_each_tdp_pte_min_level(iter, root, PG_LEVEL_PTE, start, end) {
 		if (can_yield &&
 		    tdp_mmu_iter_cond_resched(kvm, &iter, flush, false)) {
 			flush = false;
@@ -1303,7 +1303,7 @@ static bool set_spte_gfn(struct kvm *kvm, struct tdp_iter *iter,
 	/* Huge pages aren't expected to be modified without first being zapped. */
 	WARN_ON(pte_huge(range->pte) || range->start + 1 != range->end);
 
-	if (iter->level != PG_LEVEL_4K ||
+	if (iter->level != PG_LEVEL_PTE ||
 	    !is_shadow_present_pte(iter->old_spte))
 		return false;
 
@@ -1672,7 +1672,7 @@ static void clear_dirty_pt_masked(struct kvm *kvm, struct kvm_mmu_page *root,
 		if (!mask)
 			break;
 
-		if (iter.level > PG_LEVEL_4K ||
+		if (iter.level > PG_LEVEL_PTE ||
 		    !(mask & (1UL << (iter.gfn - gfn))))
 			continue;
 
@@ -1726,7 +1726,7 @@ static void zap_collapsible_spte_range(struct kvm *kvm,
 
 	rcu_read_lock();
 
-	for_each_tdp_pte_min_level(iter, root, PG_LEVEL_2M, start, end) {
+	for_each_tdp_pte_min_level(iter, root, PG_LEVEL_PMD, start, end) {
 retry:
 		if (tdp_mmu_iter_cond_resched(kvm, &iter, false, true))
 			continue;
