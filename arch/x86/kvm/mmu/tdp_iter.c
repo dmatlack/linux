@@ -10,14 +10,15 @@
  */
 static void tdp_iter_refresh_sptep(struct tdp_iter *iter)
 {
-	iter->sptep = iter->pt_path[iter->level - 1] +
-		SPTE_INDEX(iter->gfn << PAGE_SHIFT, iter->level);
+	int pte_index = TDP_PTE_INDEX(iter->gfn, iter->level);
+
+	iter->sptep = iter->pt_path[iter->level - 1] + pte_index;
 	iter->old_spte = kvm_tdp_mmu_read_spte(iter->sptep);
 }
 
 static gfn_t round_gfn_for_level(gfn_t gfn, int level)
 {
-	return gfn & -KVM_PAGES_PER_HPAGE(level);
+	return gfn & -TDP_PAGES_PER_LEVEL(level);
 }
 
 /*
@@ -46,7 +47,7 @@ void tdp_iter_start(struct tdp_iter *iter, struct kvm_mmu_page *root,
 	int root_level = root->role.level;
 
 	WARN_ON(root_level < 1);
-	WARN_ON(root_level > PT64_ROOT_MAX_LEVEL);
+	WARN_ON(root_level > TDP_ROOT_MAX_LEVEL);
 
 	iter->next_last_level_gfn = next_last_level_gfn;
 	iter->root_level = root_level;
@@ -116,11 +117,10 @@ static bool try_step_side(struct tdp_iter *iter)
 	 * Check if the iterator is already at the end of the current page
 	 * table.
 	 */
-	if (SPTE_INDEX(iter->gfn << PAGE_SHIFT, iter->level) ==
-	    (SPTE_ENT_PER_PAGE - 1))
+	if (TDP_PTE_INDEX(iter->gfn, iter->level) == (TDP_PTES_PER_PAGE - 1))
 		return false;
 
-	iter->gfn += KVM_PAGES_PER_HPAGE(iter->level);
+	iter->gfn += TDP_PAGES_PER_LEVEL(iter->level);
 	iter->next_last_level_gfn = iter->gfn;
 	iter->sptep++;
 	iter->old_spte = kvm_tdp_mmu_read_spte(iter->sptep);

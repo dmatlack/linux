@@ -4,6 +4,7 @@
 #define __KVM_X86_MMU_TDP_ITER_H
 
 #include <linux/kvm_host.h>
+#include <kvm/tdp_pgtable.h>
 
 #include "mmu.h"
 #include "spte.h"
@@ -68,7 +69,7 @@ struct tdp_iter {
 	 */
 	gfn_t yielded_gfn;
 	/* Pointers to the page tables traversed to reach the current SPTE */
-	tdp_ptep_t pt_path[PT64_ROOT_MAX_LEVEL];
+	tdp_ptep_t pt_path[TDP_ROOT_MAX_LEVEL];
 	/* A pointer to the current SPTE */
 	tdp_ptep_t sptep;
 	/* The lowest GFN mapped by the current SPTE */

@@ -7,6 +7,8 @@
 #include "tdp_mmu.h"
 #include "spte.h"
 
+#include <kvm/tdp_pgtable.h>
+
 #include <asm/cmpxchg.h>
 #include <trace/events/kvm.h>
 
@@ -428,9 +430,9 @@ static void handle_removed_pt(struct kvm *kvm, tdp_ptep_t pt, bool shared)
 
 	tdp_mmu_unlink_sp(kvm, sp, shared);
 
-	for (i = 0; i < SPTE_ENT_PER_PAGE; i++) {
+	for (i = 0; i < TDP_PTES_PER_PAGE; i++) {
 		tdp_ptep_t sptep = pt + i;
-		gfn_t gfn = base_gfn + i * KVM_PAGES_PER_HPAGE(level);
+		gfn_t gfn = base_gfn + i * TDP_PAGES_PER_LEVEL(level);
 		u64 old_spte;
 
 		if (shared) {
@@ -525,9 +527,9 @@ static void __handle_changed_spte(struct kvm *kvm, int as_id, gfn_t gfn,
 	bool is_leaf = is_present && is_last_spte(new_spte, level);
 	bool pfn_changed = spte_to_pfn(old_spte) != spte_to_pfn(new_spte);
 
-	WARN_ON(level > PT64_ROOT_MAX_LEVEL);
+	WARN_ON(level > TDP_ROOT_MAX_LEVEL);
 	WARN_ON(level < PG_LEVEL_PTE);
-	WARN_ON(gfn & (KVM_PAGES_PER_HPAGE(level) - 1));
+	WARN_ON(gfn & (TDP_PAGES_PER_LEVEL(level) - 1));
 
 	/*
 	 * If this warning were to trigger it would indicate that there was a
@@ -677,7 +679,7 @@ static inline int tdp_mmu_zap_spte_atomic(struct kvm *kvm,
 		return ret;
 
 	kvm_flush_remote_tlbs_with_address(kvm, iter->gfn,
-					   KVM_PAGES_PER_HPAGE(iter->level));
+					   TDP_PAGES_PER_LEVEL(iter->level));
 
 	/*
 	 * No other thread can overwrite the removed SPTE as they must either
@@ -1075,7 +1077,7 @@ static int tdp_mmu_map_handle_target_level(struct kvm_vcpu *vcpu,
 	else if (is_shadow_present_pte(iter->old_spte) &&
 		 !is_last_spte(iter->old_spte, iter->level))
 		kvm_flush_remote_tlbs_with_address(vcpu->kvm, sp->gfn,
-						   KVM_PAGES_PER_HPAGE(iter->level + 1));
+						   TDP_PAGES_PER_LEVEL(iter->level + 1));
 
 	/*
 	 * If the page fault was caused by a write but the page is write
@@ -1355,7 +1357,7 @@ static bool wrprot_gfn_range(struct kvm *kvm, struct kvm_mmu_page *root,
 
 	rcu_read_lock();
 
-	BUG_ON(min_level > KVM_MAX_HUGEPAGE_LEVEL);
+	BUG_ON(min_level > TDP_MAX_HUGEPAGE_LEVEL);
 
 	for_each_tdp_pte_min_level(iter, root, min_level, start, end) {
 retry:
@@ -1469,7 +1471,7 @@ static int tdp_mmu_split_huge_page(struct kvm *kvm, struct tdp_iter *iter,
 	 * No need for atomics when writing to sp->spt since the page table has
 	 * not been linked in yet and thus is not reachable from any other CPU.
 	 */
-	for (i = 0; i < SPTE_ENT_PER_PAGE; i++)
+	for (i = 0; i < TDP_PTES_PER_PAGE; i++)
 		sp->spt[i] = make_huge_page_split_spte(kvm, huge_spte, sp->role, i);
 
 	/*
@@ -1489,7 +1491,7 @@ static int tdp_mmu_split_huge_page(struct kvm *kvm, struct tdp_iter *iter,
 	 * are overwriting from the page stats. But we have to manually update
 	 * the page stats with the new present child pages.
 	 */
-	kvm_update_page_stats(kvm, level - 1, SPTE_ENT_PER_PAGE);
+	kvm_update_page_stats(kvm, level - 1, TDP_PTES_PER_PAGE);
 
 out:
 	trace_kvm_mmu_split_huge_page(iter->gfn, huge_spte, level, ret);
@@ -1731,7 +1733,7 @@ retry:
 		if (tdp_mmu_iter_cond_resched(kvm, &iter, false, true))
 			continue;
 
-		if (iter.level > KVM_MAX_HUGEPAGE_LEVEL ||
+		if (iter.level > TDP_MAX_HUGEPAGE_LEVEL ||
 		    !is_shadow_present_pte(iter.old_spte))
 			continue;
 
@@ -1793,7 +1795,7 @@ static bool write_protect_gfn(struct kvm *kvm, struct kvm_mmu_page *root,
 	u64 new_spte;
 	bool spte_set = false;
 
-	BUG_ON(min_level > KVM_MAX_HUGEPAGE_LEVEL);
+	BUG_ON(min_level > TDP_MAX_HUGEPAGE_LEVEL);
 
 	rcu_read_lock();
 
