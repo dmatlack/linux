@@ -66,4 +66,48 @@ struct kvm_mmu_page {
 	struct kvm_mmu_page_arch arch;
 };
 
+struct kvm_page_fault {
+	/* The raw faulting address. */
+	const gpa_t addr;
+
+	/* Whether the fault was synthesized to prefetch a mapping. */
+	const bool prefetch;
+
+	/* Information about the cause of the fault. */
+	const bool write;
+	const bool exec;
+
+	/* Shifted addr, or result of guest page table walk if shadow paging. */
+	gfn_t gfn;
+
+	/* The memslot that contains @gfn. May be NULL. */
+	struct kvm_memory_slot *slot;
+
+	/* Maximum page size that can be created for this fault. */
+	u8 max_level;
+
+	/*
+	 * Page size that can be created based on the max_level and the page
+	 * size used by the host mapping.
+	 */
+	u8 req_level;
+
+	/* Final page size that will be created. */
+	u8 goal_level;
+
+	/*
+	 * The value of kvm->mmu_invalidate_seq before fetching the host
+	 * mapping. Used to verify that the host mapping has not changed
+	 * after grabbing the MMU lock.
+	 */
+	unsigned long mmu_seq;
+
+	/* Information about the host mapping. */
+	kvm_pfn_t pfn;
+	hva_t hva;
+	bool map_writable;
+
+	struct kvm_page_fault_arch arch;
+};
+
 #endif /* !__KVM_MMU_TYPES_H */

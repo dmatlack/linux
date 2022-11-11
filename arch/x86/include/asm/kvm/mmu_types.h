@@ -5,6 +5,7 @@
 #include <linux/bitmap.h>
 #include <linux/list.h>
 #include <linux/types.h>
+#include <linux/kvm_types.h>
 
 /*
  * This is a subset of the overall kvm_cpu_role to minimize the size of
@@ -113,6 +114,25 @@ struct kvm_mmu_page_arch {
 
 	/* Number of writes since the last time traversal visited this page.  */
 	atomic_t write_flooding_count;
+};
+
+struct kvm_page_fault_arch {
+	const u32 error_code;
+
+	/* x86-specific error code bits */
+	const bool present;
+	const bool rsvd;
+	const bool user;
+
+	/* Derived from mmu and global state.  */
+	const bool is_tdp;
+	const bool nx_huge_page_workaround_enabled;
+
+	/*
+	 * Whether a >4KB mapping can be created or is forbidden due to NX
+	 * hugepages.
+	 */
+	bool huge_page_disallowed;
 };
 
 #endif /* !__ASM_KVM_MMU_TYPES_H */

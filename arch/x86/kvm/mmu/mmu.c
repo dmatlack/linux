@@ -3092,7 +3092,8 @@ void kvm_mmu_hugepage_adjust(struct kvm_vcpu *vcpu, struct kvm_page_fault *fault
 	struct kvm_memory_slot *slot = fault->slot;
 	kvm_pfn_t mask;
 
-	fault->huge_page_disallowed = fault->exec && fault->nx_huge_page_workaround_enabled;
+	fault->arch.huge_page_disallowed =
+		fault->exec && fault->arch.nx_huge_page_workaround_enabled;
 
 	if (unlikely(fault->max_level == PG_LEVEL_4K))
 		return;
@@ -3109,7 +3110,7 @@ void kvm_mmu_hugepage_adjust(struct kvm_vcpu *vcpu, struct kvm_page_fault *fault
 	 */
 	fault->req_level = kvm_mmu_max_mapping_level(vcpu->kvm, slot,
 						     fault->gfn, fault->max_level);
-	if (fault->req_level == PG_LEVEL_4K || fault->huge_page_disallowed)
+	if (fault->req_level == PG_LEVEL_4K || fault->arch.huge_page_disallowed)
 		return;
 
 	/*
@@ -3158,7 +3159,7 @@ static int direct_map(struct kvm_vcpu *vcpu, struct kvm_page_fault *fault)
 		 * We cannot overwrite existing page tables with an NX
 		 * large page, as the leaf could be executable.
 		 */
-		if (fault->nx_huge_page_workaround_enabled)
+		if (fault->arch.nx_huge_page_workaround_enabled)
 			disallowed_hugepage_adjust(fault, *it.sptep, it.level);
 
 		base_gfn = fault->gfn & ~(KVM_PAGES_PER_HPAGE(it.level) - 1);
@@ -3170,7 +3171,7 @@ static int direct_map(struct kvm_vcpu *vcpu, struct kvm_page_fault *fault)
 			continue;
 
 		link_shadow_page(vcpu, it.sptep, sp);
-		if (fault->huge_page_disallowed)
+		if (fault->arch.huge_page_disallowed)
 			account_nx_huge_page(vcpu->kvm, sp,
 					     fault->req_level >= it.level);
 	}
@@ -3221,7 +3222,7 @@ static int kvm_handle_noslot_fault(struct kvm_vcpu *vcpu,
 				   struct kvm_page_fault *fault,
 				   unsigned int access)
 {
-	gva_t gva = fault->is_tdp ? 0 : fault->addr;
+	gva_t gva = fault->arch.is_tdp ? 0 : fault->addr;
 
 	vcpu_cache_mmio_info(vcpu, gva, fault->gfn,
 			     access & shadow_mmio_access_mask);
@@ -3255,7 +3256,7 @@ static bool page_fault_can_be_fast(struct kvm_page_fault *fault)
 	 * generation number.  Refreshing the MMIO generation needs to go down
 	 * the slow path.  Note, EPT Misconfigs do NOT set the PRESENT flag!
 	 */
-	if (fault->rsvd)
+	if (fault->arch.rsvd)
 		return false;
 
 	/*
@@ -3273,7 +3274,7 @@ static bool page_fault_can_be_fast(struct kvm_page_fault *fault)
 	 *    SPTE is MMU-writable (determined later), the fault can be fixed
 	 *    by setting the Writable bit, which can be done out of mmu_lock.
 	 */
-	if (!fault->present)
+	if (!fault->arch.present)
 		return !kvm_ad_enabled();
 
 	/*
@@ -4119,10 +4120,10 @@ static int handle_mmio_page_fault(struct kvm_vcpu *vcpu, u64 addr, bool direct)
 static bool page_fault_handle_page_track(struct kvm_vcpu *vcpu,
 					 struct kvm_page_fault *fault)
 {
-	if (unlikely(fault->rsvd))
+	if (unlikely(fault->arch.rsvd))
 		return false;
 
-	if (!fault->present || !fault->write)
+	if (!fault->arch.present || !fault->write)
 		return false;
 
 	/*

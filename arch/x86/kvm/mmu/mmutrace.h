@@ -270,7 +270,7 @@ TRACE_EVENT(
 	TP_fast_assign(
 		__entry->vcpu_id = vcpu->vcpu_id;
 		__entry->cr2_or_gpa = fault->addr;
-		__entry->error_code = fault->error_code;
+		__entry->error_code = fault->arch.error_code;
 		__entry->sptep = sptep;
 		__entry->old_spte = old_spte;
 		__entry->new_spte = *sptep;
