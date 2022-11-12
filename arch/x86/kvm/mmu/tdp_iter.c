@@ -69,10 +69,10 @@ tdp_ptep_t spte_to_child_pt(u64 spte, int level)
 	 * There's no child entry if this entry isn't present or is a
 	 * last-level entry.
 	 */
-	if (!is_shadow_present_pte(spte) || is_last_spte(spte, level))
+	if (!tdp_pte_is_present(spte) || tdp_pte_is_leaf(spte, level))
 		return NULL;
 
-	return (tdp_ptep_t)__va(spte_to_pfn(spte) << PAGE_SHIFT);
+	return (tdp_ptep_t)__va(tdp_pte_to_pfn(spte) << PAGE_SHIFT);
 }
 
 /*

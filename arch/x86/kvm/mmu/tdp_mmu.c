@@ -334,13 +334,13 @@ static void handle_changed_spte(struct kvm *kvm, int as_id, gfn_t gfn,
 
 static void handle_changed_spte_acc_track(u64 old_spte, u64 new_spte, int level)
 {
-	if (!is_shadow_present_pte(old_spte) || !is_last_spte(old_spte, level))
+	if (!tdp_pte_is_present(old_spte) || !tdp_pte_is_leaf(old_spte, level))
 		return;
 
-	if (is_accessed_spte(old_spte) &&
-	    (!is_shadow_present_pte(new_spte) || !is_accessed_spte(new_spte) ||
-	     spte_to_pfn(old_spte) != spte_to_pfn(new_spte)))
-		kvm_set_pfn_accessed(spte_to_pfn(old_spte));
+	if (tdp_pte_is_accessed(old_spte) &&
+	    (!tdp_pte_is_present(new_spte) || !tdp_pte_is_accessed(new_spte) ||
+	     tdp_pte_to_pfn(old_spte) != tdp_pte_to_pfn(new_spte)))
+		kvm_set_pfn_accessed(tdp_pte_to_pfn(old_spte));
 }
 
 static void handle_changed_spte_dirty_log(struct kvm *kvm, int as_id, gfn_t gfn,
@@ -352,10 +352,10 @@ static void handle_changed_spte_dirty_log(struct kvm *kvm, int as_id, gfn_t gfn,
 	if (level > PG_LEVEL_PTE)
 		return;
 
-	pfn_changed = spte_to_pfn(old_spte) != spte_to_pfn(new_spte);
+	pfn_changed = tdp_pte_to_pfn(old_spte) != tdp_pte_to_pfn(new_spte);
 
-	if ((!is_writable_pte(old_spte) || pfn_changed) &&
-	    is_writable_pte(new_spte)) {
+	if ((!tdp_pte_is_writable(old_spte) || pfn_changed) &&
+	    tdp_pte_is_writable(new_spte)) {
 		slot = __gfn_to_memslot(__kvm_memslots(kvm, as_id), gfn);
 		mark_page_dirty_in_slot(kvm, slot, gfn);
 	}
@@ -445,8 +445,8 @@ static void handle_removed_pt(struct kvm *kvm, tdp_ptep_t pt, bool shared)
 			 * value to the removed SPTE value.
 			 */
 			for (;;) {
-				old_spte = kvm_tdp_mmu_write_spte_atomic(sptep, REMOVED_SPTE);
-				if (!is_removed_spte(old_spte))
+				old_spte = kvm_tdp_mmu_write_spte_atomic(sptep, REMOVED_TDP_PTE);
+				if (!tdp_pte_is_removed(old_spte))
 					break;
 				cpu_relax();
 			}
@@ -461,7 +461,7 @@ static void handle_removed_pt(struct kvm *kvm, tdp_ptep_t pt, bool shared)
 			 * unreachable.
 			 */
 			old_spte = kvm_tdp_mmu_read_spte(sptep);
-			if (!is_shadow_present_pte(old_spte))
+			if (!tdp_pte_is_present(old_spte))
 				continue;
 
 			/*
@@ -481,7 +481,8 @@ static void handle_removed_pt(struct kvm *kvm, tdp_ptep_t pt, bool shared)
 			 * strictly necessary for the same reason, but using
 			 * the remove SPTE value keeps the shared/exclusive
 			 * paths consistent and allows the handle_changed_spte()
-			 * call below to hardcode the new value to REMOVED_SPTE.
+			 * call below to hardcode the new value to
+			 * REMOVED_TDP_PTE.
 			 *
 			 * Note, even though dropping a Dirty bit is the only
 			 * scenario where a non-atomic update could result in a
@@ -493,10 +494,11 @@ static void handle_removed_pt(struct kvm *kvm, tdp_ptep_t pt, bool shared)
 			 * it here.
 			 */
 			old_spte = kvm_tdp_mmu_write_spte(sptep, old_spte,
-							  REMOVED_SPTE, level);
+							  REMOVED_TDP_PTE,
+							  level);
 		}
 		handle_changed_spte(kvm, sp->role.as_id, gfn, old_spte,
-				    REMOVED_SPTE, level, shared);
+				    REMOVED_TDP_PTE, level, shared);
 	}
 
 	call_rcu(&sp->rcu_head, tdp_mmu_free_sp_rcu_callback);
@@ -521,11 +523,11 @@ static void __handle_changed_spte(struct kvm *kvm, int as_id, gfn_t gfn,
 				  u64 old_spte, u64 new_spte, int level,
 				  bool shared)
 {
-	bool was_present = is_shadow_present_pte(old_spte);
-	bool is_present = is_shadow_present_pte(new_spte);
-	bool was_leaf = was_present && is_last_spte(old_spte, level);
-	bool is_leaf = is_present && is_last_spte(new_spte, level);
-	bool pfn_changed = spte_to_pfn(old_spte) != spte_to_pfn(new_spte);
+	bool was_present = tdp_pte_is_present(old_spte);
+	bool is_present = tdp_pte_is_present(new_spte);
+	bool was_leaf = was_present && tdp_pte_is_leaf(old_spte, level);
+	bool is_leaf = is_present && tdp_pte_is_leaf(new_spte, level);
+	bool pfn_changed = tdp_pte_to_pfn(old_spte) != tdp_pte_to_pfn(new_spte);
 
 	WARN_ON(level > TDP_ROOT_MAX_LEVEL);
 	WARN_ON(level < PG_LEVEL_PTE);
@@ -560,7 +562,7 @@ static void __handle_changed_spte(struct kvm *kvm, int as_id, gfn_t gfn,
 	trace_kvm_tdp_mmu_spte_changed(as_id, gfn, level, old_spte, new_spte);
 
 	if (is_leaf)
-		check_spte_writable_invariants(new_spte);
+		tdp_pte_check_leaf_invariants(new_spte);
 
 	/*
 	 * The only times a SPTE should be changed from a non-present to
@@ -574,9 +576,9 @@ static void __handle_changed_spte(struct kvm *kvm, int as_id, gfn_t gfn,
 		 * impact the guest since both the former and current SPTEs
 		 * are nonpresent.
 		 */
-		if (WARN_ON(!is_mmio_spte(old_spte) &&
-			    !is_mmio_spte(new_spte) &&
-			    !is_removed_spte(new_spte)))
+		if (WARN_ON(!tdp_pte_is_mmio(old_spte) &&
+			    !tdp_pte_is_mmio(new_spte) &&
+			    !tdp_pte_is_removed(new_spte)))
 			pr_err("Unexpected SPTE change! Nonpresent SPTEs\n"
 			       "should not be replaced with another,\n"
 			       "different nonpresent SPTE, unless one or both\n"
@@ -590,9 +592,9 @@ static void __handle_changed_spte(struct kvm *kvm, int as_id, gfn_t gfn,
 	if (is_leaf != was_leaf)
 		kvm_update_page_stats(kvm, level, is_leaf ? 1 : -1);
 
-	if (was_leaf && is_dirty_spte(old_spte) &&
-	    (!is_present || !is_dirty_spte(new_spte) || pfn_changed))
-		kvm_set_pfn_dirty(spte_to_pfn(old_spte));
+	if (was_leaf && tdp_pte_is_dirty(old_spte) &&
+	    (!is_present || !tdp_pte_is_dirty(new_spte) || pfn_changed))
+		kvm_set_pfn_dirty(tdp_pte_to_pfn(old_spte));
 
 	/*
 	 * Recursively handle child PTs if the change removed a subtree from
@@ -645,7 +647,7 @@ static inline int tdp_mmu_set_spte_atomic(struct kvm *kvm,
 	 * and pre-checking before inserting a new SPTE is advantageous as it
 	 * avoids unnecessary work.
 	 */
-	WARN_ON_ONCE(iter->yielded || is_removed_spte(iter->old_spte));
+	WARN_ON_ONCE(iter->yielded || tdp_pte_is_removed(iter->old_spte));
 
 	lockdep_assert_held_read(&kvm->mmu_lock);
 
@@ -674,7 +676,7 @@ static inline int tdp_mmu_zap_spte_atomic(struct kvm *kvm,
 	 * immediately installing a present entry in its place
 	 * before the TLBs are flushed.
 	 */
-	ret = tdp_mmu_set_spte_atomic(kvm, iter, REMOVED_SPTE);
+	ret = tdp_mmu_set_spte_atomic(kvm, iter, REMOVED_TDP_PTE);
 	if (ret)
 		return ret;
 
@@ -730,7 +732,7 @@ static u64 __tdp_mmu_set_spte(struct kvm *kvm, int as_id, tdp_ptep_t sptep,
 	 * should be used. If operating under the MMU lock in write mode, the
 	 * use of the removed SPTE should not be necessary.
 	 */
-	WARN_ON(is_removed_spte(old_spte) || is_removed_spte(new_spte));
+	WARN_ON(tdp_pte_is_removed(old_spte) || tdp_pte_is_removed(new_spte));
 
 	old_spte = kvm_tdp_mmu_write_spte(sptep, old_spte, new_spte, level);
 
@@ -781,8 +783,8 @@ static inline void tdp_mmu_set_spte_no_dirty_log(struct kvm *kvm,
 
 #define tdp_root_for_each_leaf_pte(_iter, _root, _start, _end)	\
 	tdp_root_for_each_pte(_iter, _root, _start, _end)		\
-		if (!is_shadow_present_pte(_iter.old_spte) ||		\
-		    !is_last_spte(_iter.old_spte, _iter.level))		\
+		if (!tdp_pte_is_present(_iter.old_spte) ||		\
+		    !tdp_pte_is_leaf(_iter.old_spte, _iter.level))		\
 			continue;					\
 		else
 
@@ -858,7 +860,7 @@ retry:
 		if (tdp_mmu_iter_cond_resched(kvm, &iter, false, shared))
 			continue;
 
-		if (!is_shadow_present_pte(iter.old_spte))
+		if (!tdp_pte_is_present(iter.old_spte))
 			continue;
 
 		if (iter.level > zap_level)
@@ -919,7 +921,7 @@ bool kvm_tdp_mmu_zap_sp(struct kvm *kvm, struct kvm_mmu_page *sp)
 		return false;
 
 	old_spte = kvm_tdp_mmu_read_spte(sp->ptep);
-	if (WARN_ON_ONCE(!is_shadow_present_pte(old_spte)))
+	if (WARN_ON_ONCE(!tdp_pte_is_present(old_spte)))
 		return false;
 
 	__tdp_mmu_set_spte(kvm, sp->role.as_id, sp->ptep, old_spte, 0,
@@ -953,8 +955,8 @@ static bool tdp_mmu_zap_leafs(struct kvm *kvm, struct kvm_mmu_page *root,
 			continue;
 		}
 
-		if (!is_shadow_present_pte(iter.old_spte) ||
-		    !is_last_spte(iter.old_spte, iter.level))
+		if (!tdp_pte_is_present(iter.old_spte) ||
+		    !tdp_pte_is_leaf(iter.old_spte, iter.level))
 			continue;
 
 		tdp_mmu_set_spte(kvm, &iter, 0);
@@ -1074,8 +1076,8 @@ static int tdp_mmu_map_handle_target_level(struct kvm_vcpu *vcpu,
 		ret = RET_PF_SPURIOUS;
 	else if (tdp_mmu_set_spte_atomic(vcpu->kvm, iter, new_spte))
 		return RET_PF_RETRY;
-	else if (is_shadow_present_pte(iter->old_spte) &&
-		 !is_last_spte(iter->old_spte, iter->level))
+	else if (tdp_pte_is_present(iter->old_spte) &&
+		 !tdp_pte_is_leaf(iter->old_spte, iter->level))
 		kvm_flush_remote_tlbs_with_address(vcpu->kvm, sp->gfn,
 						   TDP_PAGES_PER_LEVEL(iter->level + 1));
 
@@ -1090,7 +1092,7 @@ static int tdp_mmu_map_handle_target_level(struct kvm_vcpu *vcpu,
 	}
 
 	/* If a MMIO SPTE is installed, the MMIO will need to be emulated. */
-	if (unlikely(is_mmio_spte(new_spte))) {
+	if (unlikely(tdp_pte_is_mmio(new_spte))) {
 		vcpu->stat.pf_mmio_spte_created++;
 		trace_mark_mmio_spte(rcu_dereference(iter->sptep), iter->gfn,
 				     new_spte);
@@ -1168,12 +1170,12 @@ int kvm_tdp_mmu_map(struct kvm_vcpu *vcpu, struct kvm_page_fault *fault)
 		 * If SPTE has been frozen by another thread, just give up and
 		 * retry, avoiding unnecessary page table allocation and free.
 		 */
-		if (is_removed_spte(iter.old_spte))
+		if (tdp_pte_is_removed(iter.old_spte))
 			goto retry;
 
 		/* Step down into the lower level page table if it exists. */
-		if (is_shadow_present_pte(iter.old_spte) &&
-		    !is_large_pte(iter.old_spte))
+		if (tdp_pte_is_present(iter.old_spte) &&
+		    !tdp_pte_is_huge(iter.old_spte))
 			continue;
 
 		/*
@@ -1185,7 +1187,7 @@ int kvm_tdp_mmu_map(struct kvm_vcpu *vcpu, struct kvm_page_fault *fault)
 
 		sp->arch.nx_huge_page_disallowed = fault->arch.huge_page_disallowed;
 
-		if (is_shadow_present_pte(iter.old_spte))
+		if (tdp_pte_is_present(iter.old_spte))
 			r = tdp_mmu_split_huge_page(kvm, &iter, sp, true);
 		else
 			r = tdp_mmu_link_sp(kvm, &iter, sp, true);
@@ -1205,6 +1207,15 @@ int kvm_tdp_mmu_map(struct kvm_vcpu *vcpu, struct kvm_page_fault *fault)
 			track_possible_nx_huge_page(kvm, sp);
 			spin_unlock(&kvm->arch.tdp_mmu_pages_lock);
 		}
+	}
+
+	/*
+	 * Force the guest to retry the access if the upper level SPTEs aren't
+	 * in place, or if the target leaf SPTE is frozen by another CPU.
+	 */
+	if (iter.level != fault->goal_level || tdp_pte_is_removed(iter.old_spte)) {
+		rcu_read_unlock();
+		return RET_PF_RETRY;
 	}
 
 	ret = tdp_mmu_map_handle_target_level(vcpu, fault, &iter);
@@ -1255,27 +1266,13 @@ static __always_inline bool kvm_tdp_mmu_handle_gfn(struct kvm *kvm,
 static bool age_gfn_range(struct kvm *kvm, struct tdp_iter *iter,
 			  struct kvm_gfn_range *range)
 {
-	u64 new_spte = 0;
+	u64 new_spte;
 
 	/* If we have a non-accessed entry we don't need to change the pte. */
-	if (!is_accessed_spte(iter->old_spte))
+	if (!tdp_pte_is_accessed(iter->old_spte))
 		return false;
 
-	new_spte = iter->old_spte;
-
-	if (spte_ad_enabled(new_spte)) {
-		new_spte &= ~shadow_accessed_mask;
-	} else {
-		/*
-		 * Capture the dirty status of the page, so that it doesn't get
-		 * lost when the SPTE is marked for access tracking.
-		 */
-		if (is_writable_pte(new_spte))
-			kvm_set_pfn_dirty(spte_to_pfn(new_spte));
-
-		new_spte = mark_spte_for_access_track(new_spte);
-	}
-
+	new_spte = tdp_pte_clear_accessed(iter->old_spte);
 	tdp_mmu_set_spte_no_acc_track(kvm, iter, new_spte);
 
 	return true;
@@ -1289,7 +1286,7 @@ bool kvm_tdp_mmu_age_gfn_range(struct kvm *kvm, struct kvm_gfn_range *range)
 static bool test_age_gfn(struct kvm *kvm, struct tdp_iter *iter,
 			 struct kvm_gfn_range *range)
 {
-	return is_accessed_spte(iter->old_spte);
+	return tdp_pte_is_accessed(iter->old_spte);
 }
 
 bool kvm_tdp_mmu_test_age_gfn(struct kvm *kvm, struct kvm_gfn_range *range)
@@ -1306,7 +1303,7 @@ static bool set_spte_gfn(struct kvm *kvm, struct tdp_iter *iter,
 	WARN_ON(pte_huge(range->pte) || range->start + 1 != range->end);
 
 	if (iter->level != PG_LEVEL_PTE ||
-	    !is_shadow_present_pte(iter->old_spte))
+	    !tdp_pte_is_present(iter->old_spte))
 		return false;
 
 	/*
@@ -1364,12 +1361,12 @@ retry:
 		if (tdp_mmu_iter_cond_resched(kvm, &iter, false, true))
 			continue;
 
-		if (!is_shadow_present_pte(iter.old_spte) ||
-		    !is_last_spte(iter.old_spte, iter.level) ||
-		    !(iter.old_spte & PT_WRITABLE_MASK))
+		if (!tdp_pte_is_present(iter.old_spte) ||
+		    !tdp_pte_is_leaf(iter.old_spte, iter.level) ||
+		    !tdp_pte_is_writable(iter.old_spte))
 			continue;
 
-		new_spte = iter.old_spte & ~PT_WRITABLE_MASK;
+		new_spte = tdp_pte_clear_writable(iter.old_spte);
 
 		if (tdp_mmu_set_spte_atomic(kvm, &iter, new_spte))
 			goto retry;
@@ -1525,7 +1522,7 @@ retry:
 		if (tdp_mmu_iter_cond_resched(kvm, &iter, false, shared))
 			continue;
 
-		if (!is_shadow_present_pte(iter.old_spte) || !is_large_pte(iter.old_spte))
+		if (!tdp_pte_is_present(iter.old_spte) || !tdp_pte_is_huge(iter.old_spte))
 			continue;
 
 		if (!sp) {
@@ -1607,20 +1604,12 @@ retry:
 		if (tdp_mmu_iter_cond_resched(kvm, &iter, false, true))
 			continue;
 
-		if (!is_shadow_present_pte(iter.old_spte))
+		if (!tdp_pte_is_present(iter.old_spte))
 			continue;
 
-		if (spte_ad_need_write_protect(iter.old_spte)) {
-			if (is_writable_pte(iter.old_spte))
-				new_spte = iter.old_spte & ~PT_WRITABLE_MASK;
-			else
-				continue;
-		} else {
-			if (iter.old_spte & shadow_dirty_mask)
-				new_spte = iter.old_spte & ~shadow_dirty_mask;
-			else
-				continue;
-		}
+		new_spte = tdp_pte_clear_dirty(iter.old_spte, false);
+		if (new_spte == iter.old_spte)
+			continue;
 
 		if (tdp_mmu_set_spte_atomic(kvm, &iter, new_spte))
 			goto retry;
@@ -1680,17 +1669,9 @@ static void clear_dirty_pt_masked(struct kvm *kvm, struct kvm_mmu_page *root,
 
 		mask &= ~(1UL << (iter.gfn - gfn));
 
-		if (wrprot || spte_ad_need_write_protect(iter.old_spte)) {
-			if (is_writable_pte(iter.old_spte))
-				new_spte = iter.old_spte & ~PT_WRITABLE_MASK;
-			else
-				continue;
-		} else {
-			if (iter.old_spte & shadow_dirty_mask)
-				new_spte = iter.old_spte & ~shadow_dirty_mask;
-			else
-				continue;
-		}
+		new_spte = tdp_pte_clear_dirty(iter.old_spte, wrprot);
+		if (new_spte == iter.old_spte)
+			continue;
 
 		tdp_mmu_set_spte_no_dirty_log(kvm, &iter, new_spte);
 	}
@@ -1734,7 +1715,7 @@ retry:
 			continue;
 
 		if (iter.level > TDP_MAX_HUGEPAGE_LEVEL ||
-		    !is_shadow_present_pte(iter.old_spte))
+		    !tdp_pte_is_present(iter.old_spte))
 			continue;
 
 		/*
@@ -1742,7 +1723,7 @@ retry:
 		 * a large page size, then its parent would have been zapped
 		 * instead of stepping down.
 		 */
-		if (is_last_spte(iter.old_spte, iter.level))
+		if (tdp_pte_is_leaf(iter.old_spte, iter.level))
 			continue;
 
 		/*
@@ -1800,13 +1781,11 @@ static bool write_protect_gfn(struct kvm *kvm, struct kvm_mmu_page *root,
 	rcu_read_lock();
 
 	for_each_tdp_pte_min_level(iter, root, min_level, gfn, gfn + 1) {
-		if (!is_shadow_present_pte(iter.old_spte) ||
-		    !is_last_spte(iter.old_spte, iter.level))
+		if (!tdp_pte_is_present(iter.old_spte) ||
+		    !tdp_pte_is_leaf(iter.old_spte, iter.level))
 			continue;
 
-		new_spte = iter.old_spte &
-			~(PT_WRITABLE_MASK | shadow_mmu_writable_mask);
-
+		new_spte = tdp_pte_clear_mmu_writable(iter.old_spte);
 		if (new_spte == iter.old_spte)
 			break;
 
