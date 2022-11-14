@@ -1696,6 +1696,13 @@ void kvm_tdp_mmu_clear_dirty_pt_masked(struct kvm *kvm,
 		clear_dirty_pt_masked(kvm, root, gfn, mask, wrprot);
 }
 
+__weak int tdp_mmu_max_mapping_level(struct kvm *kvm,
+				     const struct kvm_memory_slot *slot,
+				     struct tdp_iter *iter)
+{
+	return TDP_MAX_HUGEPAGE_LEVEL;
+}
+
 static void zap_collapsible_spte_range(struct kvm *kvm,
 				       struct kvm_mmu_page *root,
 				       const struct kvm_memory_slot *slot)
@@ -1727,15 +1734,14 @@ retry:
 		/*
 		 * If iter.gfn resides outside of the slot, i.e. the page for
 		 * the current level overlaps but is not contained by the slot,
-		 * then the SPTE can't be made huge.  More importantly, trying
-		 * to query that info from slot->arch.lpage_info will cause an
+		 * then the SPTE can't be made huge. On x86, trying to query
+		 * that info from slot->arch.lpage_info will cause an
 		 * out-of-bounds access.
 		 */
 		if (iter.gfn < start || iter.gfn >= end)
 			continue;
 
-		max_mapping_level = kvm_mmu_max_mapping_level(kvm, slot,
-							      iter.gfn, PG_LEVEL_NUM);
+		max_mapping_level = tdp_mmu_max_mapping_level(kvm, slot, &iter);
 		if (max_mapping_level < iter.level)
 			continue;
 
