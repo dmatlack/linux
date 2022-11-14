@@ -3151,8 +3151,6 @@ static int direct_map(struct kvm_vcpu *vcpu, struct kvm_page_fault *fault)
 	int ret;
 	gfn_t base_gfn = fault->gfn;
 
-	kvm_mmu_hugepage_adjust(vcpu, fault);
-
 	trace_kvm_mmu_spte_requested(fault);
 	for_each_shadow_entry(vcpu, fault->addr, it) {
 		/*
@@ -4330,6 +4328,8 @@ static int direct_page_fault(struct kvm_vcpu *vcpu, struct kvm_page_fault *fault
 	if (r)
 		goto out_unlock;
 
+	kvm_mmu_hugepage_adjust(vcpu, fault);
+
 	r = direct_map(vcpu, fault);
 
 out_unlock:
@@ -4407,6 +4407,8 @@ static int kvm_tdp_mmu_page_fault(struct kvm_vcpu *vcpu,
 
 	if (is_page_fault_stale(vcpu, fault))
 		goto out_unlock;
+
+	kvm_mmu_hugepage_adjust(vcpu, fault);
 
 	r = kvm_tdp_mmu_map(vcpu, fault);
 
