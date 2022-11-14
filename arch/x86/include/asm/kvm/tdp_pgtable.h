@@ -4,6 +4,7 @@
 
 #include <linux/types.h>
 #include <linux/kvm_types.h>
+#include <kvm/mmu_types.h>
 
 struct kvm_mmu_page *tdp_mmu_root(struct kvm_vcpu *vcpu);
 
@@ -57,4 +58,13 @@ kvm_pfn_t tdp_pte_to_pfn(u64 pte);
 
 void tdp_pte_check_leaf_invariants(u64 pte);
 
+struct tdp_iter;
+
+u64 tdp_mmu_make_leaf_pte(struct kvm_vcpu *vcpu, struct kvm_page_fault *fault,
+			  struct tdp_iter *iter, bool *wrprot);
+u64 tdp_mmu_make_nonleaf_pte(struct kvm_mmu_page *sp);
+u64 tdp_mmu_make_changed_pte_notifier_pte(struct tdp_iter *iter,
+					  struct kvm_gfn_range *range);
+u64 tdp_mmu_make_huge_page_split_pte(struct kvm *kvm, u64 huge_spte,
+				     struct kvm_mmu_page *sp, int index);
 #endif /* !__ASM_KVM_TDP_PGTABLE_H */

@@ -5,6 +5,7 @@
 
 #include "mmu.h"
 #include "spte.h"
+#include "tdp_iter.h"
 
 /* Removed SPTEs must not be misconstrued as shadow present PTEs. */
 static_assert(!(REMOVED_TDP_PTE & SPTE_MMU_PRESENT_MASK));
@@ -75,3 +76,38 @@ void tdp_pte_check_leaf_invariants(u64 pte)
 	check_spte_writable_invariants(pte);
 }
 
+u64 tdp_mmu_make_leaf_pte(struct kvm_vcpu *vcpu,
+			  struct kvm_page_fault *fault,
+			  struct tdp_iter *iter,
+			  bool *wrprot)
+{
+	struct kvm_mmu_page *sp = sptep_to_sp(rcu_dereference(iter->sptep));
+	u64 new_spte;
+
+	if (unlikely(!fault->slot))
+		return make_mmio_spte(vcpu, iter->gfn, ACC_ALL);
+
+	*wrprot = make_spte(vcpu, sp, fault->slot, ACC_ALL, iter->gfn,
+			    fault->pfn, iter->old_spte, fault->prefetch, true,
+			    fault->map_writable, &new_spte);
+
+	return new_spte;
+}
+
+u64 tdp_mmu_make_nonleaf_pte(struct kvm_mmu_page *sp)
+{
+	return make_nonleaf_spte(sp->spt, !kvm_ad_enabled());
+}
+
+u64 tdp_mmu_make_changed_pte_notifier_pte(struct tdp_iter *iter,
+					  struct kvm_gfn_range *range)
+{
+	return kvm_mmu_changed_pte_notifier_make_spte(iter->old_spte,
+						      pte_pfn(range->pte));
+}
+
+u64 tdp_mmu_make_huge_page_split_pte(struct kvm *kvm, u64 huge_spte,
+				     struct kvm_mmu_page *sp, int index)
+{
+	return make_huge_page_split_spte(kvm, huge_spte, sp->role, index);
+}

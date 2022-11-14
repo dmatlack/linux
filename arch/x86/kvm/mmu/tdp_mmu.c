@@ -1057,17 +1057,13 @@ static int tdp_mmu_map_handle_target_level(struct kvm_vcpu *vcpu,
 					  struct tdp_iter *iter)
 {
 	struct kvm_mmu_page *sp = sptep_to_sp(rcu_dereference(iter->sptep));
-	u64 new_spte;
 	int ret = RET_PF_FIXED;
 	bool wrprot = false;
+	u64 new_spte;
 
 	WARN_ON(sp->role.level != fault->goal_level);
-	if (unlikely(!fault->slot))
-		new_spte = make_mmio_spte(vcpu, iter->gfn, ACC_ALL);
-	else
-		wrprot = make_spte(vcpu, sp, fault->slot, ACC_ALL, iter->gfn,
-					 fault->pfn, iter->old_spte, fault->prefetch, true,
-					 fault->map_writable, &new_spte);
+
+	new_spte = tdp_mmu_make_leaf_pte(vcpu, fault, iter, &wrprot);
 
 	if (new_spte == iter->old_spte)
 		ret = RET_PF_SPURIOUS;
@@ -1117,7 +1113,7 @@ static int tdp_mmu_map_handle_target_level(struct kvm_vcpu *vcpu,
 static int tdp_mmu_link_sp(struct kvm *kvm, struct tdp_iter *iter,
 			   struct kvm_mmu_page *sp, bool shared)
 {
-	u64 spte = make_nonleaf_spte(sp->spt, !kvm_ad_enabled());
+	u64 spte = tdp_mmu_make_nonleaf_pte(sp);
 	int ret = 0;
 
 	if (shared) {
@@ -1312,9 +1308,7 @@ static bool set_spte_gfn(struct kvm *kvm, struct tdp_iter *iter,
 	tdp_mmu_set_spte(kvm, iter, 0);
 
 	if (!pte_write(range->pte)) {
-		new_spte = kvm_mmu_changed_pte_notifier_make_spte(iter->old_spte,
-								  pte_pfn(range->pte));
-
+		new_spte = tdp_mmu_make_changed_pte_notifier_pte(iter, range);
 		tdp_mmu_set_spte(kvm, iter, new_spte);
 	}
 
@@ -1466,7 +1460,7 @@ static int tdp_mmu_split_huge_page(struct kvm *kvm, struct tdp_iter *iter,
 	 * not been linked in yet and thus is not reachable from any other CPU.
 	 */
 	for (i = 0; i < TDP_PTES_PER_PAGE; i++)
-		sp->spt[i] = make_huge_page_split_spte(kvm, huge_spte, sp->role, i);
+		sp->spt[i] = tdp_mmu_make_huge_page_split_pte(kvm, huge_spte, sp, i);
 
 	/*
 	 * Replace the huge spte with a pointer to the populated lower level
