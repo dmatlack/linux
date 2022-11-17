@@ -1196,7 +1196,7 @@ static int user_mem_abort(struct kvm_vcpu *vcpu, phys_addr_t fault_ipa,
 	bool device = false;
 	unsigned long mmu_seq;
 	struct kvm *kvm = vcpu->kvm;
-	struct kvm_mmu_memory_cache *memcache = &vcpu->arch.mmu_page_cache;
+	struct kvm_mmu_memory_cache *memcache = &vcpu->mmu_page_table_cache;
 	struct vm_area_struct *vma;
 	short vma_shift;
 	gfn_t gfn;

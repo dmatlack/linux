@@ -387,6 +387,11 @@ struct kvm_vcpu {
 	 */
 	struct kvm_memory_slot *last_used_slot;
 	u64 last_used_slot_gen;
+
+#ifdef KVM_ARCH_NR_OBJS_PER_MEMORY_CACHE
+	/* Cache used to allocate pages for use as page tables. */
+	struct kvm_mmu_memory_cache mmu_page_table_cache;
+#endif
 };
 
 /*
