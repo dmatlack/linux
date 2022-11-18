@@ -391,6 +391,9 @@ struct kvm_vcpu {
 #ifdef KVM_ARCH_NR_OBJS_PER_MEMORY_CACHE
 	/* Cache used to allocate pages for use as page tables. */
 	struct kvm_mmu_memory_cache mmu_page_table_cache;
+
+	/* Cache used to allocate kvm_mmu_page structs. */
+	struct kvm_mmu_memory_cache mmu_page_header_cache;
 #endif
 };
 
