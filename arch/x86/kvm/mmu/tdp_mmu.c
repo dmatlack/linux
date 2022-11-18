@@ -2,12 +2,12 @@
 
 #include "mmu.h"
 #include "mmu_internal.h"
-#include "mmutrace.h"
 #include "tdp_iter.h"
 #include "tdp_mmu.h"
 #include "spte.h"
 
 #include <kvm/tdp_pgtable.h>
+#include <kvm/mmutrace.h>
 
 #include <asm/cmpxchg.h>
 #include <trace/events/kvm.h>
