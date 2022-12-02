@@ -676,8 +676,7 @@ static inline int tdp_mmu_zap_spte_atomic(struct kvm *kvm,
 	if (ret)
 		return ret;
 
-	kvm_flush_remote_tlbs_with_address(kvm, iter->gfn,
-					   TDP_PAGES_PER_LEVEL(iter->level));
+	kvm_flush_remote_tlbs_range(kvm, iter->gfn, TDP_PAGES_PER_LEVEL(iter->level));
 
 	/*
 	 * No other thread can overwrite the removed SPTE as they must either
@@ -1067,8 +1066,8 @@ static int tdp_mmu_map_handle_target_level(struct kvm_vcpu *vcpu,
 		return RET_PF_RETRY;
 	else if (tdp_pte_is_present(iter->old_spte) &&
 		 !tdp_pte_is_leaf(iter->old_spte, iter->level))
-		kvm_flush_remote_tlbs_with_address(vcpu->kvm, sp->gfn,
-						   TDP_PAGES_PER_LEVEL(iter->level + 1));
+		kvm_flush_remote_tlbs_range(vcpu->kvm, sp->gfn,
+					    TDP_PAGES_PER_LEVEL(iter->level + 1));
 
 	/*
 	 * If the page fault was caused by a write but the page is write
