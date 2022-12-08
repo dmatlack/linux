@@ -19,13 +19,14 @@
 #include "ioapic.h"
 #include "mmu.h"
 #include "mmu_internal.h"
-#include "tdp_mmu.h"
 #include "x86.h"
 #include "kvm_cache_regs.h"
 #include "smm.h"
 #include "kvm_emulate.h"
 #include "cpuid.h"
 #include "spte.h"
+
+#include <kvm/tdp_mmu.h>
 
 #include <linux/kvm_host.h>
 #include <linux/types.h>
