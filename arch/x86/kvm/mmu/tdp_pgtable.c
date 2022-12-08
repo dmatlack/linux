@@ -170,3 +170,14 @@ int tdp_mmu_max_mapping_level(struct kvm *kvm,
 {
 	return kvm_mmu_max_mapping_level(kvm, slot, iter->gfn, PG_LEVEL_NUM);
 }
+
+gfn_t tdp_mmu_max_gfn_exclusive(void)
+{
+	/*
+	 * Bound TDP MMU walks at host.MAXPHYADDR.  KVM disallows memslots with
+	 * a gpa range that would exceed the max gfn, and KVM does not create
+	 * MMIO SPTEs for "impossible" gfns, instead sending such accesses down
+	 * the slow emulation path every time.
+	 */
+	return kvm_mmu_max_gfn() + 1;
+}

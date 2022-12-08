@@ -67,4 +67,7 @@ u64 tdp_mmu_make_changed_pte_notifier_pte(struct tdp_iter *iter,
 					  struct kvm_gfn_range *range);
 u64 tdp_mmu_make_huge_page_split_pte(struct kvm *kvm, u64 huge_spte,
 				     struct kvm_mmu_page *sp, int index);
+
+gfn_t tdp_mmu_max_gfn_exclusive(void);
+
 #endif /* !__ASM_KVM_TDP_PGTABLE_H */
