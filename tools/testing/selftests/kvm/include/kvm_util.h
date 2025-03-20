@@ -907,6 +907,8 @@ void vcpu_args_set(struct kvm_vcpu *vcpu, unsigned int num, ...);
 void kvm_irq_line(struct kvm_vm *vm, uint32_t irq, int level);
 int _kvm_irq_line(struct kvm_vm *vm, uint32_t irq, int level);
 
+void kvm_add_irqfd(struct kvm_vm *vm, u32 gsi, int fd);
+
 #define KVM_MAX_IRQ_ROUTES		4096
 
 struct kvm_irq_routing *kvm_gsi_routing_create(void);
@@ -914,6 +916,8 @@ void kvm_gsi_routing_irqchip_add(struct kvm_irq_routing *routing,
 		uint32_t gsi, uint32_t pin);
 int _kvm_gsi_routing_write(struct kvm_vm *vm, struct kvm_irq_routing *routing);
 void kvm_gsi_routing_write(struct kvm_vm *vm, struct kvm_irq_routing *routing);
+
+void kvm_route_gsi(struct kvm_vm *vm, struct kvm_irq_routing_entry *entry);
 
 const char *exit_reason_str(unsigned int exit_reason);
 

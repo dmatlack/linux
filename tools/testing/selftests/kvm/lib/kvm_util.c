@@ -1891,6 +1891,16 @@ void kvm_irq_line(struct kvm_vm *vm, uint32_t irq, int level)
 	TEST_ASSERT(ret >= 0, KVM_IOCTL_ERROR(KVM_IRQ_LINE, ret));
 }
 
+void kvm_add_irqfd(struct kvm_vm *vm, u32 gsi, int fd)
+{
+	struct kvm_irqfd arg = {
+		.gsi = gsi,
+		.fd = fd,
+	};
+
+	vm_ioctl(vm, KVM_IRQFD, &arg);
+}
+
 struct kvm_irq_routing *kvm_gsi_routing_create(void)
 {
 	struct kvm_irq_routing *routing;
@@ -1939,6 +1949,17 @@ void kvm_gsi_routing_write(struct kvm_vm *vm, struct kvm_irq_routing *routing)
 
 	ret = _kvm_gsi_routing_write(vm, routing);
 	TEST_ASSERT(!ret, KVM_IOCTL_ERROR(KVM_SET_GSI_ROUTING, ret));
+}
+
+void kvm_route_gsi(struct kvm_vm *vm, struct kvm_irq_routing_entry *entry)
+{
+	u8 buf[sizeof(struct kvm_irq_routing) + sizeof(*entry)] = {};
+	struct kvm_irq_routing *routes = (void *)&buf;
+
+	routes->nr = 1;
+	routes->entries[0] = *entry;
+
+	vm_ioctl(vm, KVM_SET_GSI_ROUTING, routes);
 }
 
 /*
