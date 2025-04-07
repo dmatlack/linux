@@ -117,15 +117,20 @@ TEST_F(vfio_dma_mapping_test, dma_map_unmap)
 	const int prot = PROT_READ | PROT_WRITE;
 	const u64 iova = test_config.iova;
 	const u64 size = test_config.size;
+	struct vfio_dma_region region = {
+		.iova = iova,
+		.size = size,
+	};
 	struct iommu_mapping mapping;
-	void *mem;
 	int rc;
 
-	mem = mmap(NULL, size, prot, test_config.mmap_flags, -1, 0);
-	ASSERT_NE(mem, MAP_FAILED);
+	region.vaddr = mmap(NULL, size, prot, test_config.mmap_flags, -1, 0);
+	ASSERT_NE(region.vaddr, MAP_FAILED);
 
-	vfio_pci_dma_map(self->device, iova, size, mem);
-	printf("Mapped HVA %p (size 0x%lx) at IOVA 0x%lx\n", mem, size, iova);
+	vfio_pci_dma_map(self->device, &region);
+	printf("Mapped HVA %p (size 0x%lx) at IOVA 0x%lx\n", region.vaddr, size, iova);
+
+	ASSERT_EQ(iova, to_iova(self->device, region.vaddr));
 
 	rc = iommu_mapping_get(test_config.bdf, iova, &mapping);
 	if (rc == -EOPNOTSUPP)
@@ -157,11 +162,12 @@ TEST_F(vfio_dma_mapping_test, dma_map_unmap)
 	}
 
 unmap:
-	vfio_pci_dma_unmap(self->device, iova, size);
+	vfio_pci_dma_unmap(self->device, &region);
 	printf("Unmapped IOVA 0x%lx\n", iova);
+	ASSERT_EQ(INVALID_IOVA, __to_iova(self->device, region.vaddr));
 	ASSERT_NE(0, iommu_mapping_get(test_config.bdf, iova, &mapping));
 
-	ASSERT_TRUE(!munmap(mem, size));
+	ASSERT_TRUE(!munmap(region.vaddr, size));
 }
 
 static void help(const char *name)
