@@ -128,21 +128,25 @@ TEST_F(vfio_dma_mapping_test, dma_map_unmap)
 {
 	const u64 size = variant->size ?: getpagesize();
 	const int flags = variant->mmap_flags;
+	struct vfio_dma_region region;
 	struct iommu_mapping mapping;
 	const u64 iova = 0;
-	void *mem;
 	int rc;
 
-	mem = mmap(NULL, size, PROT_READ | PROT_WRITE, flags, -1, 0);
+	region.iova = iova;
+	region.size = size;
+	region.vaddr = mmap(NULL, size, PROT_READ | PROT_WRITE, flags, -1, 0);
 
 	/* Skip the test if there aren't enough HugeTLB pages available. */
-	if (flags & MAP_HUGETLB && mem == MAP_FAILED)
+	if (flags & MAP_HUGETLB && region.vaddr == MAP_FAILED)
 		SKIP(return, "mmap() failed: %s (%d)\n", strerror(errno), errno);
 	else
-		ASSERT_NE(mem, MAP_FAILED);
+		ASSERT_NE(region.vaddr, MAP_FAILED);
 
-	vfio_pci_dma_map(self->device, iova, size, mem);
-	printf("Mapped HVA %p (size 0x%lx) at IOVA 0x%lx\n", mem, size, iova);
+	vfio_pci_dma_map(self->device, &region);
+	printf("Mapped HVA %p (size 0x%lx) at IOVA 0x%lx\n", region.vaddr, size, iova);
+
+	ASSERT_EQ(iova, to_iova(self->device, region.vaddr));
 
 	rc = iommu_mapping_get(device_bdf, iova, &mapping);
 	if (rc == -EOPNOTSUPP)
@@ -174,11 +178,12 @@ TEST_F(vfio_dma_mapping_test, dma_map_unmap)
 	}
 
 unmap:
-	vfio_pci_dma_unmap(self->device, iova, size);
+	vfio_pci_dma_unmap(self->device, &region);
 	printf("Unmapped IOVA 0x%lx\n", iova);
+	ASSERT_EQ(INVALID_IOVA, __to_iova(self->device, region.vaddr));
 	ASSERT_NE(0, iommu_mapping_get(device_bdf, iova, &mapping));
 
-	ASSERT_TRUE(!munmap(mem, size));
+	ASSERT_TRUE(!munmap(region.vaddr, size));
 }
 
 int main(int argc, char *argv[])
