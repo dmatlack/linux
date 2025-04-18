@@ -162,6 +162,8 @@ struct vfio_pci_device {
 	struct vfio_pci_driver driver;
 };
 
+const char *vfio_pci_get_cdev_path(const char *bdf);
+
 struct vfio_pci_device *vfio_pci_device_init(const char *bdf, int iommu_type);
 void vfio_pci_device_cleanup(struct vfio_pci_device *device);
 void vfio_pci_device_reset(struct vfio_pci_device *device);

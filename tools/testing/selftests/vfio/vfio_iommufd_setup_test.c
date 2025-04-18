@@ -1,8 +1,4 @@
 // SPDX-License-Identifier: GPL-2.0
-#include <assert.h>
-#include <dirent.h>
-#include <fcntl.h>
-
 #include <uapi/linux/types.h>
 #include <linux/limits.h>
 #include <linux/sizes.h>
@@ -11,39 +7,15 @@
 
 #include <stdint.h>
 #include <stdio.h>
-#include <string.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
 
 #include "../kselftest_harness.h"
 
-static const char iommu_dev_path[] = "/dev/iommu";
-char cdev_path[PATH_MAX] = { '\0' };
+#include <vfio_util.h>
 
-static void set_cdev_path(const char *bdf)
-{
-	char dir_path[PATH_MAX];
-	DIR *dir;
-	struct dirent *entry;
-
-	snprintf(dir_path, sizeof(dir_path), "/sys/bus/pci/devices/%s/vfio-dev/", bdf);
-
-	dir = opendir(dir_path);
-	assert(dir);
-
-	/* Find the file named "vfio<number>" */
-	while ((entry = readdir(dir)) != NULL) {
-		if (!strncmp("vfio", entry->d_name, 4)) {
-			snprintf(cdev_path, sizeof(cdev_path), "/dev/vfio/devices/%s",
-				 entry->d_name);
-			break;
-		}
-	}
-
-	assert(strlen(cdev_path) > 0);
-
-	closedir(dir);
-}
+static const char *iommu_dev_path = "/dev/iommu";
+static const char *cdev_path;
 
 static int vfio_device_bind_iommufd_ioctl(int cdev_fd, int iommufd)
 {
@@ -148,15 +120,13 @@ TEST_F(vfio_cdev, attach_invalid_pt_fails)
 
 int main(int argc, char *argv[])
 {
-	char *bdf;
-
 	if (argc != 2) {
 		printf("Usage: %s bus:device:function\n", argv[0]);
 		return 1;
 	}
 
-	bdf = argv[1];
-	set_cdev_path(bdf);
+	cdev_path = vfio_pci_get_cdev_path(argv[1]);
+
 	printf("Using cdev device %s\n", cdev_path);
 
 	return test_harness_run(1, argv);
