@@ -104,7 +104,7 @@ FIXTURE(vfio_dma_mapping_test)
 
 FIXTURE_SETUP(vfio_dma_mapping_test)
 {
-	self->device = vfio_pci_device_init(test_config.bdf, VFIO_TYPE1_IOMMU);
+	self->device = vfio_pci_device_init(test_config.bdf, default_iommu_mode);
 }
 
 FIXTURE_TEARDOWN(vfio_dma_mapping_test)
