@@ -14,7 +14,8 @@
 
 #include "../kselftest_harness.h"
 
-const char *device_bdf;
+static const char *device_bdf;
+static const char *iommu_mode;
 
 /*
  * Limit the number of MSIs enabled/disabled by the test regardless of the
@@ -27,7 +28,7 @@ FIXTURE(vfio_pci_device_test) {
 };
 
 FIXTURE_SETUP(vfio_pci_device_test) {
-	self->device = vfio_pci_device_init(device_bdf, default_iommu_mode);
+	self->device = vfio_pci_device_init(device_bdf, iommu_mode);
 }
 
 FIXTURE_TEARDOWN(vfio_pci_device_test) {
@@ -113,7 +114,7 @@ FIXTURE_VARIANT_ADD(vfio_pci_irq_test, msix) {
 };
 
 FIXTURE_SETUP(vfio_pci_irq_test) {
-	self->device = vfio_pci_device_init(device_bdf, default_iommu_mode);
+	self->device = vfio_pci_device_init(device_bdf, iommu_mode);
 }
 
 FIXTURE_TEARDOWN(vfio_pci_irq_test) {
@@ -165,14 +166,30 @@ TEST_F(vfio_pci_device_test, reset)
 	vfio_pci_device_reset(self->device);
 }
 
+static void help(const char *name)
+{
+	printf("Usage: %s [-i iommu_mode] segment:bus:device.function\n", name);
+	iommu_mode_help("-i");
+	exit(1);
+}
+
 int main(int argc, char *argv[])
 {
-	if (argc != 2) {
-		fprintf(stderr, "usage: %s segment:bus:device.function\n", argv[0]);
-		return KSFT_FAIL;
+	int c;
+
+	while ((c = getopt(argc, argv, "i:")) != -1) {
+		switch (c) {
+		case 'i':
+			iommu_mode = optarg;
+			break;
+		default:
+			help(argv[0]);
+		}
 	}
 
-	device_bdf = argv[1];
+	if (optind >= argc)
+		help(argv[0]);
 
-	return test_harness_run(1, argv);
+	device_bdf = argv[optind];
+	return test_harness_run(0, NULL);
 }

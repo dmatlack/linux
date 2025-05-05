@@ -370,6 +370,21 @@ static const struct vfio_iommu_mode iommu_modes[] = {
 
 const char *default_iommu_mode = "vfio_type1_iommu";
 
+void iommu_mode_help(const char *flag)
+{
+	int i;
+
+	printf("  %s: The iommu mode to use for the test (default: %s)\n"
+	       "\n"
+	       "      Available modes:\n",
+	       flag, default_iommu_mode);
+
+	for (i = 0; i < ARRAY_SIZE(iommu_modes); i++)
+		printf("        %s\n", iommu_modes[i].name);
+
+	printf("\n");
+}
+
 static const struct vfio_iommu_mode *lookup_iommu_mode(const char *iommu_mode)
 {
 	int i;

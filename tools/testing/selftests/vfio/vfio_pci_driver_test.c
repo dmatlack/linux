@@ -11,7 +11,8 @@
 
 #include "../kselftest_harness.h"
 
-const char *device_bdf;
+static const char *device_bdf;
+static const char *iommu_mode;
 
 #define ASSERT_NO_MSI(_eventfd) do {			\
 	u64 __value;					\
@@ -62,7 +63,7 @@ FIXTURE(vfio_pci_driver_test) {
 FIXTURE_SETUP(vfio_pci_driver_test) {
 	struct vfio_pci_driver *driver;
 
-	self->device = vfio_pci_device_init(device_bdf, default_iommu_mode);
+	self->device = vfio_pci_device_init(device_bdf, iommu_mode);
 
 	driver = &self->device->driver;
 
@@ -217,23 +218,39 @@ TEST_F_TIMEOUT(vfio_pci_driver_test, memcpy_storm, 60)
 	ASSERT_NO_MSI(self->msi_fd);
 }
 
+static void help(const char *name)
+{
+	printf("Usage: %s [-i iommu_mode] segment:bus:device.function\n", name);
+	iommu_mode_help("-i");
+	exit(1);
+}
+
 int main(int argc, char *argv[])
 {
 	struct vfio_pci_device *device;
+	int c;
 
-	if (argc != 2) {
-		fprintf(stderr, "usage: %s segment:bus:device.function\n", argv[0]);
-		return KSFT_FAIL;
+	while ((c = getopt(argc, argv, "i:")) != -1) {
+		switch (c) {
+		case 'i':
+			iommu_mode = optarg;
+			break;
+		default:
+			help(argv[0]);
+		}
 	}
 
-	device_bdf = argv[1];
+	if (optind >= argc)
+		help(argv[0]);
 
-	device = vfio_pci_device_init(device_bdf, default_iommu_mode);
+	device_bdf = argv[optind];
+
+	device = vfio_pci_device_init(device_bdf, iommu_mode);
 	if (!device->driver.ops) {
 		fprintf(stderr, "No driver found for device %s\n", device_bdf);
 		return KSFT_SKIP;
 	}
 	vfio_pci_device_cleanup(device);
 
-	return test_harness_run(1, argv);
+	return test_harness_run(0, NULL);
 }

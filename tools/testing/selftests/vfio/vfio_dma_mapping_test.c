@@ -18,6 +18,7 @@ static struct {
 	u64 iova;
 	int mmap_flags;
 	const char *bdf;
+	const char *iommu_mode;
 } test_config;
 
 struct iommu_mapping {
@@ -104,7 +105,7 @@ FIXTURE(vfio_dma_mapping_test)
 
 FIXTURE_SETUP(vfio_dma_mapping_test)
 {
-	self->device = vfio_pci_device_init(test_config.bdf, default_iommu_mode);
+	self->device = vfio_pci_device_init(test_config.bdf, test_config.iommu_mode);
 }
 
 FIXTURE_TEARDOWN(vfio_dma_mapping_test)
@@ -172,13 +173,15 @@ unmap:
 
 static void help(const char *name)
 {
-	printf("Usage: %s [-b backing_src] segment:bus:device.function\n"
+	printf("Usage: %s [-b backing_src] [-i iommu_mode] segment:bus:device.function\n"
 	       "  -b: Which backing memory to use (default: anonymous)\n"
 	       "\n"
 	       "      anonymous\n"
 	       "      anonymous_hugetlb_2mb\n"
-	       "      anonymous_hugetlb_1gb\n",
+	       "      anonymous_hugetlb_1gb\n"
+	       "\n",
 	       name);
+	iommu_mode_help("-i");
 	exit(1);
 }
 
@@ -211,10 +214,13 @@ int main(int argc, char *argv[])
 	const char *backing_src = "anonymous";
 	int c;
 
-	while ((c = getopt(argc, argv, "b:")) != -1) {
+	while ((c = getopt(argc, argv, "b:i:")) != -1) {
 		switch (c) {
 		case 'b':
 			backing_src = optarg;
+			break;
+		case 'i':
+			test_config.iommu_mode = optarg;
 			break;
 		default:
 			help(argv[0]);
