@@ -2562,13 +2562,26 @@ EXPORT_SYMBOL_GPL(vfio_pci_core_set_params);
 
 static void vfio_pci_core_cleanup(void)
 {
+	vfio_pci_liveupdate_cleanup();
 	vfio_pci_uninit_perm_bits();
 }
 
 static int __init vfio_pci_core_init(void)
 {
+	int ret;
+
 	/* Allocate shared config space permission data used by all devices */
-	return vfio_pci_init_perm_bits();
+	ret = vfio_pci_init_perm_bits();
+	if (ret)
+		return ret;
+
+	ret = vfio_pci_liveupdate_init();
+	if (ret) {
+		vfio_pci_uninit_perm_bits();
+		return ret;
+	}
+
+	return 0;
 }
 
 module_init(vfio_pci_core_init);
