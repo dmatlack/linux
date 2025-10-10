@@ -1388,11 +1388,9 @@ const struct file_operations vfio_device_fops = {
 
 static struct vfio_device *vfio_device_from_file(struct file *file)
 {
-	struct vfio_device_file *df = file->private_data;
+	struct vfio_device_file *df = to_vfio_device_file(file);
 
-	if (file->f_op != &vfio_device_fops)
-		return NULL;
-	return df->device;
+	return df ? df->device : NULL;
 }
 
 /**

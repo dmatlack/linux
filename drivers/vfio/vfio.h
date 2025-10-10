@@ -36,6 +36,14 @@ vfio_allocate_device_file(struct vfio_device *device);
 
 extern const struct file_operations vfio_device_fops;
 
+static inline struct vfio_device_file *to_vfio_device_file(struct file *file)
+{
+	if (file->f_op != &vfio_device_fops)
+		return NULL;
+
+	return file->private_data;
+}
+
 #ifdef CONFIG_VFIO_NOIOMMU
 extern bool vfio_noiommu __read_mostly;
 #else

@@ -11,14 +11,25 @@
 
 #include <linux/liveupdate.h>
 #include <linux/liveupdate/abi/vfio_pci.h>
+#include <linux/vfio.h>
 #include <linux/errno.h>
 
+#include "../vfio.h"
 #include "vfio_pci_priv.h"
 
 static bool vfio_pci_liveupdate_can_preserve(struct liveupdate_file_handler *handler,
 					     struct file *file)
 {
-	return false;
+	struct vfio_device_file *df = to_vfio_device_file(file);
+
+	if (!df)
+		return false;
+
+	/* Live Update support is limited to cdev files. */
+	if (df->group)
+		return false;
+
+	return df->device->ops == &vfio_pci_ops;
 }
 
 static const struct liveupdate_file_ops vfio_pci_liveupdate_file_ops = {
