@@ -44,6 +44,13 @@ static inline struct vfio_device_file *to_vfio_device_file(struct file *file)
 	return file->private_data;
 }
 
+static inline struct vfio_device *vfio_device_from_file(struct file *file)
+{
+	struct vfio_device_file *df = to_vfio_device_file(file);
+
+	return df ? df->device : NULL;
+}
+
 #ifdef CONFIG_VFIO_NOIOMMU
 extern bool vfio_noiommu __read_mostly;
 #else
