@@ -2,6 +2,7 @@
 /*
  * Copyright (c) 2023 Intel Corporation.
  */
+#include <linux/anon_inodes.h>
 #include <linux/vfio.h>
 #include <linux/iommufd.h>
 
@@ -20,10 +21,8 @@ void vfio_init_device_cdev(struct vfio_device *device)
  * device access via the fd opened by this function is blocked until
  * .open_device() is called successfully during BIND_IOMMUFD.
  */
-int vfio_device_fops_cdev_open(struct inode *inode, struct file *filep)
+static int __vfio_device_fops_cdev_open(struct vfio_device *device, struct file *filep)
 {
-	struct vfio_device *device = container_of(inode->i_cdev,
-						  struct vfio_device, cdev);
 	struct vfio_device_file *df;
 	int ret;
 
@@ -51,6 +50,33 @@ int vfio_device_fops_cdev_open(struct inode *inode, struct file *filep)
 err_put_registration:
 	vfio_device_put_registration(device);
 	return ret;
+}
+
+int vfio_device_fops_cdev_open(struct inode *inode, struct file *filep)
+{
+	struct vfio_device *device = container_of(inode->i_cdev,
+						  struct vfio_device, cdev);
+
+	return __vfio_device_fops_cdev_open(device, filep);
+}
+
+struct file *vfio_device_liveupdate_cdev_open(struct vfio_device *device)
+{
+	struct file *filep;
+	int ret;
+
+	filep = anon_inode_getfile_fmode("[vfio-cdev]", &vfio_device_fops, NULL,
+					 O_RDWR, FMODE_PREAD | FMODE_PWRITE);
+	if (IS_ERR(filep))
+		return filep;
+
+	ret = __vfio_device_fops_cdev_open(device, filep);
+	if (ret) {
+		fput(filep);
+		return ERR_PTR(ret);
+	}
+
+	return filep;
 }
 
 static void vfio_df_get_kvm_safe(struct vfio_device_file *df)

@@ -13,7 +13,9 @@
 #include <linux/liveupdate/abi/vfio_pci.h>
 #include <linux/vfio.h>
 #include <linux/errno.h>
+#include <linux/anon_inodes.h>
 #include <linux/kexec_handover.h>
+#include <linux/file.h>
 
 #include "../vfio.h"
 #include "vfio_pci_priv.h"
@@ -132,9 +134,58 @@ out:
 	return ret;
 }
 
+static int match_device(struct device *dev, const void *arg)
+{
+	struct vfio_device *device = container_of(dev, struct vfio_device, device);
+	const struct vfio_pci_core_device_ser *ser = arg;
+	struct vfio_pci_core_device *vdev;
+	struct pci_dev *pdev;
+
+	vdev = container_of(device, struct vfio_pci_core_device, vdev);
+	pdev = vdev->pdev;
+
+	return ser->bdf == pci_dev_id(pdev) && ser->domain == pci_domain_nr(pdev->bus);
+}
+
 static int vfio_pci_liveupdate_retrieve(struct liveupdate_file_op_args *args)
 {
-	return -EOPNOTSUPP;
+	struct vfio_pci_core_device_ser *ser;
+	struct vfio_device *device;
+	struct folio *folio;
+	struct file *file;
+
+	folio = kho_restore_folio(args->serialized_data);
+	if (!folio)
+		return -ENOENT;
+
+	ser = folio_address(folio);
+	device = vfio_find_device_in_cdev_class(ser, match_device);
+	if (!device)
+		return -ENODEV;
+
+	file = vfio_device_liveupdate_cdev_open(device);
+
+	/* Drop the reference from vfio_find_device_in_cdev_class() */
+	put_device(&device->device);
+
+	if (IS_ERR(file))
+		return PTR_ERR(file);
+
+	args->file = file;
+	return 0;
+}
+
+static bool vfio_pci_liveupdate_can_finish(struct liveupdate_file_op_args *args)
+{
+	return args->retrieved;
+}
+
+static void vfio_pci_liveupdate_finish(struct liveupdate_file_op_args *args)
+{
+	struct folio *folio;
+
+	folio = virt_to_folio(phys_to_virt(args->serialized_data));
+	folio_put(folio);
 }
 
 static const struct liveupdate_file_ops vfio_pci_liveupdate_file_ops = {
@@ -143,6 +194,8 @@ static const struct liveupdate_file_ops vfio_pci_liveupdate_file_ops = {
 	.unpreserve = vfio_pci_liveupdate_unpreserve,
 	.freeze = vfio_pci_liveupdate_freeze,
 	.retrieve = vfio_pci_liveupdate_retrieve,
+	.can_finish = vfio_pci_liveupdate_can_finish,
+	.finish = vfio_pci_liveupdate_finish,
 	.owner = THIS_MODULE,
 };
 

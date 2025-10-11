@@ -390,6 +390,7 @@ static inline void vfio_device_del(struct vfio_device *device)
 }
 
 int vfio_device_fops_cdev_open(struct inode *inode, struct file *filep);
+struct file *vfio_device_liveupdate_cdev_open(struct vfio_device *device);
 long vfio_df_ioctl_bind_iommufd(struct vfio_device_file *df,
 				struct vfio_device_bind_iommufd __user *arg);
 void vfio_df_unbind_iommufd(struct vfio_device_file *df);
