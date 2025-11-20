@@ -143,6 +143,7 @@ static int match_device(struct device *dev, const void *arg)
 static int vfio_pci_liveupdate_retrieve(struct liveupdate_file_op_args *args)
 {
 	struct vfio_pci_core_device_ser *ser;
+	struct vfio_pci_core_device *vdev;
 	struct vfio_device *device;
 	struct folio *folio;
 	struct file *file;
@@ -184,6 +185,9 @@ static int vfio_pci_liveupdate_retrieve(struct liveupdate_file_op_args *args)
 		goto out;
 	}
 
+	vdev = container_of(device, struct vfio_pci_core_device, vdev);
+	vdev->liveupdate_state = ser;
+
 	args->file = file;
 
 out:
@@ -195,12 +199,29 @@ out:
 
 static bool vfio_pci_liveupdate_can_finish(struct liveupdate_file_op_args *args)
 {
-	return args->retrieved;
+	struct vfio_device *device;
+
+	if (!args->retrieved)
+		return false;
+
+	device = vfio_device_from_file(args->file);
+
+	/*
+	 * Ensure the device has been opened, which means its safe for
+	 * finish to free struct vfio_pci_device_ser.
+	 */
+	guard(mutex)(&device->dev_set->lock);
+	return device->cdev_opened;
 }
 
 static void vfio_pci_liveupdate_finish(struct liveupdate_file_op_args *args)
 {
+	struct vfio_device *device = vfio_device_from_file(args->file);
+	struct vfio_pci_core_device *vdev;
 	struct folio *folio;
+
+	vdev = container_of(device, struct vfio_pci_core_device, vdev);
+	vdev->liveupdate_state = NULL;
 
 	folio = virt_to_folio(phys_to_virt(args->serialized_data));
 	folio_put(folio);
