@@ -94,6 +94,12 @@ struct vfio_pci_core_device {
 	struct vfio_pci_core_device	*sriov_pf_core_dev;
 	struct notifier_block	nb;
 	struct rw_semaphore	memory_lock;
+
+	/*
+	 * State passed by the previous kernel during a Live Update. Only
+	 * safe to access when first opening the device.
+	 */
+	struct vfio_pci_core_device_ser *liveupdate_state;
 };
 
 /* Will be exported for vfio pci drivers usage */
