@@ -1,0 +1,16 @@
+#!/bin/bash
+
+function main() {
+	if [ -f ../selftests/vfio/cleanup.sh ]; then
+		../selftests/vfio/cleanup.sh
+	fi
+
+	echo 0 > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages
+	echo 0 > /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages
+
+	if [ -c /mnt/devtmpfs/liveupdate ]; then
+		rm /dev/liveupdate
+	fi
+}
+
+main "$@"
