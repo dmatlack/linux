@@ -639,9 +639,10 @@ static void luo_file_finish_one(struct luo_file_set *file_set,
 	args.file = luo_file->file;
 	args.serialized_data = luo_file->serialized_data;
 	args.retrieved = luo_file->retrieved;
-	luo_flb_file_finish(luo_file->fh);
 
 	luo_file->fh->ops->finish(&args);
+
+	luo_flb_file_finish(luo_file->fh);
 }
 
 /**
