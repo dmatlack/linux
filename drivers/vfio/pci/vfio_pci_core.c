@@ -469,6 +469,10 @@ int vfio_pci_core_enable(struct vfio_pci_core_device *vdev)
 	u16 cmd;
 	u8 msix_pos;
 
+	/* Incoming preserved devices must be retrieved via /dev/liveupdate */
+	if (pci_liveupdate_incoming_is_preserved(pdev) && !vdev->liveupdate_state)
+		return -EBUSY;
+
 	if (!disable_idle_d3) {
 		ret = pm_runtime_resume_and_get(&pdev->dev);
 		if (ret < 0)
