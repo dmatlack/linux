@@ -313,6 +313,15 @@ static int vfio_group_ioctl_get_device_fd(struct vfio_group *group,
 	if (IS_ERR(device))
 		return PTR_ERR(device);
 
+	/*
+	 * This device was preserved across a Live Update. Accessing it via
+	 * VFIO_GROUP_GET_DEVICE_FD is not allowed.
+	 */
+	if (vfio_liveupdate_incoming_is_preserved(device)) {
+		ret = -EBUSY;
+		goto err_put_device;
+	}
+
 	fdno = get_unused_fd_flags(O_CLOEXEC);
 	if (fdno < 0) {
 		ret = fdno;
