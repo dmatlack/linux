@@ -40,6 +40,7 @@
 #include <linux/resource_ext.h>
 #include <linux/msi_api.h>
 #include <uapi/linux/pci.h>
+#include <linux/liveupdate.h>
 
 #include <linux/pci_ids.h>
 
@@ -581,6 +582,9 @@ struct pci_dev {
 	u16		tph_cap;	/* TPH capability offset */
 	u8		tph_mode;	/* TPH mode */
 	u8		tph_req_type;	/* TPH requester type */
+#endif
+#ifdef CONFIG_LIVEUPDATE
+	unsigned int	liveupdate_incoming:1;	/* Preserved across LU by previous kernel */
 #endif
 };
 
@@ -2853,5 +2857,47 @@ void pci_uevent_ers(struct pci_dev *pdev, enum  pci_ers_result err_type);
 #define pci_WARN_ONCE(pdev, condition, fmt, arg...) \
 	WARN_ONCE(condition, "%s %s: " fmt, \
 		  dev_driver_string(&(pdev)->dev), pci_name(pdev), ##arg)
+
+#ifdef CONFIG_LIVEUPDATE
+int pci_liveupdate_outgoing_preserve(struct pci_dev *dev);
+void pci_liveupdate_outgoing_unpreserve(struct pci_dev *dev);
+void pci_liveupdate_setup_device(struct pci_dev *dev);
+u32 pci_liveupdate_incoming_nr_devices(void);
+void pci_liveupdate_incoming_finish(struct pci_dev *dev);
+int pci_liveupdate_register_fh(struct liveupdate_file_handler *fh);
+int pci_liveupdate_unregister_fh(struct liveupdate_file_handler *fh);
+#else /* !CONFIG_LIVEUPDATE */
+static inline int pci_liveupdate_outgoing_preserve(struct pci_dev *dev)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline void pci_liveupdate_outgoing_unpreserve(struct pci_dev *dev)
+{
+}
+
+static inline int pci_liveupdate_setup_device(struct pci_dev *dev)
+{
+}
+
+static inline u32 pci_liveupdate_incoming_nr_devices(void)
+{
+	return 0;
+}
+
+static inline void pci_liveupdate_incoming_finish(struct pci_dev *dev)
+{
+}
+
+static inline int pci_liveupdate_register_fh(struct liveupdate_file_handler *fh)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline int pci_liveupdate_unregister_fh(struct liveupdate_file_handler *fh)
+{
+	return -EOPNOTSUPP;
+}
+#endif /* !CONFIG_LIVEUPDATE */
 
 #endif /* LINUX_PCI_H */
