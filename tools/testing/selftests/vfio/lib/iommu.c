@@ -24,7 +24,7 @@
 const char *default_iommu_mode = "iommufd";
 
 /* Reminder: Keep in sync with FIXTURE_VARIANT_ADD_ALL_IOMMU_MODES(). */
-static const struct iommu_mode iommu_modes[] = {
+const struct iommu_mode iommu_modes[] = {
 	{
 		.name = "vfio_type1_iommu",
 		.container_path = "/dev/vfio/vfio",
@@ -49,6 +49,8 @@ static const struct iommu_mode iommu_modes[] = {
 		.name = "iommufd",
 	},
 };
+
+const int nr_iommu_modes = ARRAY_SIZE(iommu_modes);
 
 static const struct iommu_mode *lookup_iommu_mode(const char *iommu_mode)
 {
