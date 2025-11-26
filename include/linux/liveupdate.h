@@ -165,12 +165,15 @@ struct liveupdate_flb_ops {
  * @obj:   The live kernel object returned by .preserve() or .retrieve().
  * @lock:  A mutex that protects all fields within this structure, providing
  *         the synchronization service for the FLB's ops.
+ * @finished: True once the FLB's finish() callback has run, to prevent an FLB
+ *            from being retrieve()'d again after finish() (incoming only).
  */
 struct luo_flb_private_state {
 	long count;
 	u64 data;
 	void *obj;
 	struct mutex lock;
+	bool finished;
 };
 
 /*

@@ -155,6 +155,9 @@ static int luo_flb_retrieve_one(struct liveupdate_flb *flb)
 
 	guard(mutex)(&private->incoming.lock);
 
+	if (private->incoming.finished)
+		return -ENODATA;
+
 	if (private->incoming.obj)
 		return 0;
 
@@ -213,6 +216,7 @@ static void luo_flb_file_finish_one(struct liveupdate_flb *flb)
 
 			private->incoming.data = 0;
 			private->incoming.obj = NULL;
+			private->incoming.finished = true;
 		}
 	}
 }
