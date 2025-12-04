@@ -1387,6 +1387,18 @@ static int pci_scan_bridge_extend(struct pci_bus *bus, struct pci_dev *dev,
 	bool fixed_buses;
 	u8 fixed_sec, fixed_sub;
 	int next_busnr;
+	bool assign_all_busses;
+
+	/*
+	 * When devices are preserved across Live Update inherit bus numbers
+	 * from the previous kernel instead of assigning new ones. Otherwise
+	 * the bus numbers of preserved devices could change and that would
+	 * break the translation of their DMAs through the IOMMU.
+	 */
+	if (pci_liveupdate_incoming_nr_devices())
+		assign_all_busses = false;
+	else
+		assign_all_busses = pcibios_assign_all_busses();
 
 	/*
 	 * Make sure the bridge is powered on to be able to access config
@@ -1424,7 +1436,7 @@ static int pci_scan_bridge_extend(struct pci_bus *bus, struct pci_dev *dev,
 	pci_write_config_word(dev, PCI_BRIDGE_CONTROL,
 			      bctl & ~PCI_BRIDGE_CTL_MASTER_ABORT);
 
-	if ((secondary || subordinate) && !pcibios_assign_all_busses() &&
+	if ((secondary || subordinate) && !assign_all_busses &&
 	    !is_cardbus && !broken) {
 		unsigned int cmax, buses;
 
@@ -1467,7 +1479,7 @@ static int pci_scan_bridge_extend(struct pci_bus *bus, struct pci_dev *dev,
 		 * do in the second pass.
 		 */
 		if (!pass) {
-			if (pcibios_assign_all_busses() || broken || is_cardbus)
+			if (assign_all_busses || broken || is_cardbus)
 
 				/*
 				 * Temporarily disable forwarding of the
@@ -1542,7 +1554,7 @@ static int pci_scan_bridge_extend(struct pci_bus *bus, struct pci_dev *dev,
 							max+i+1))
 					break;
 				while (parent->parent) {
-					if ((!pcibios_assign_all_busses()) &&
+					if ((!assign_all_busses) &&
 					    (parent->busn_res.end > max) &&
 					    (parent->busn_res.end <= max+i)) {
 						j = 1;
