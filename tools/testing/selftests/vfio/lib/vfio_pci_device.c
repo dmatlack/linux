@@ -238,7 +238,25 @@ void vfio_pci_device_reset(struct vfio_pci_device *device)
 	ioctl_assert(device->fd, VFIO_DEVICE_RESET, NULL);
 }
 
-void vfio_pci_group_setup(struct vfio_pci_device *device, const char *bdf)
+static unsigned int vfio_pci_get_group_from_dev(const char *bdf)
+{
+	char dev_iommu_group_path[PATH_MAX] = {0};
+	char sysfs_path[PATH_MAX] = {0};
+	unsigned int group;
+	int ret;
+
+	snprintf(sysfs_path, PATH_MAX, "%s/%s/iommu_group", PCI_SYSFS_PATH, bdf);
+
+	ret = readlink(sysfs_path, dev_iommu_group_path, sizeof(dev_iommu_group_path));
+	VFIO_ASSERT_NE(ret, -1, "Failed to get the IOMMU group for device: %s\n", bdf);
+
+	ret = sscanf(basename(dev_iommu_group_path), "%u", &group);
+	VFIO_ASSERT_EQ(ret, 1, "Failed to get the IOMMU group for device: %s\n", bdf);
+
+	return group;
+}
+
+void vfio_pci_group_setup(struct vfio_pci_device *device)
 {
 	struct vfio_group_status group_status = {
 		.argsz = sizeof(group_status),
@@ -246,8 +264,8 @@ void vfio_pci_group_setup(struct vfio_pci_device *device, const char *bdf)
 	char group_path[32];
 	int group;
 
-	group = sysfs_iommu_group_get(bdf);
-	snprintf_assert(group_path, sizeof(group_path), "/dev/vfio/%d", group);
+	group = vfio_pci_get_group_from_dev(device->bdf);
+	snprintf(group_path, sizeof(group_path), "/dev/vfio/%d", group);
 
 	device->group_fd = open(group_path, O_RDWR);
 	VFIO_ASSERT_GE(device->group_fd, 0, "open(%s) failed\n", group_path);
