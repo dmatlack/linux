@@ -65,7 +65,10 @@
  * Update:
  *
  *  * The PCI Segment, Bus, Device, and Function numbers assigned to the device
- *    are guaranteed to remain the same across Live Update.
+ *    are guaranteed to remain the same across Live Update. Note that this is
+ *    true even if pci=assign-busses is set on the command line. The kernel will
+ *    always inherit bus numbers assigned by the previous kernel during a Live
+ *    Update.
  *
  * This list will be extended in the future as new support is added.
  *
@@ -315,6 +318,21 @@ void pci_liveupdate_setup_device(struct pci_dev *dev)
 	ser = pci_liveupdate_flb_get_incoming();
 	if (!ser)
 		return;
+
+	/*
+	 * During a Live Update, preserved devices are allowed to continue
+	 * performing memory transactions. The kernel must not change the fabric
+	 * topology, including bus numbers, since that would require disabling
+	 * and flushing any memory transactions first.
+	 *
+	 * To keep things simple, inherit the secondary and subordinate bus
+	 * numbers on _all_ bridges if _any_ PCI devices were preserved (i.e.
+	 * even bridges without any downstream endpoints that were preserved).
+	 * This avoids accidentally assigning a bridge a new window that
+	 * overlaps with a preserved device that is downstream of a different
+	 * bridge.
+	 */
+	dev->liveupdate_inherit_buses = true;
 
 	dev_ser = pci_ser_find(ser, dev);
 	if (!dev_ser || dev_ser->finished) {
