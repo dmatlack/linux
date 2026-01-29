@@ -607,6 +607,7 @@ int vfio_pci_core_enable(struct vfio_pci_core_device *vdev)
 
 	vfio_pci_core_map_bars(vdev);
 
+	vdev->liveupdate_incoming_state = NULL;
 	return 0;
 
 out_free_zdev:
