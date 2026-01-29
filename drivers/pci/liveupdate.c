@@ -79,6 +79,19 @@
  * preserved. These may be relaxed in the future:
  *
  *  * The device cannot be a Virtual Function (VF).
+ *
+ * BDF Stability
+ * =============
+ *
+ * The PCI core guarantees that incoming preserved devices can be identified by
+ * the same bus, device, and function numbers as prior to kexec. To accomplish
+ * this, the PCI core always inherits the secondary and subordinate bus numbers
+ * assigned to bridges during enumeration, rather than assigning new ones (the
+ * PCI core assumes that the previous kernel established a sane topology).
+ *
+ * If a misconfigured or unconfigured bridge is encountered during enumeration
+ * while there are incoming preserved devices, it's secondary and subordinate
+ * bus numbers will be cleared and devices below it will not be enumerated.
  */
 
 #include <linux/bsearch.h>
@@ -311,6 +324,21 @@ void pci_liveupdate_setup_device(struct pci_dev *dev)
 	ser = pci_liveupdate_flb_get_incoming();
 	if (!ser)
 		return;
+
+	/*
+	 * During a Live Update, preserved devices are allowed to continue
+	 * performing memory transactions. The kernel must not change the fabric
+	 * topology, including bus numbers, since that would require disabling
+	 * and flushing any memory transactions first.
+	 *
+	 * To keep things simple, inherit the secondary and subordinate bus
+	 * numbers on _all_ bridges if _any_ PCI devices were preserved (i.e.
+	 * even bridges without any downstream endpoints that were preserved).
+	 * This avoids accidentally assigning a bridge a new window that
+	 * overlaps with a preserved device that is downstream of a different
+	 * bridge.
+	 */
+	dev->liveupdate_inherit_buses = true;
 
 	dev_ser = pci_ser_find(ser, dev);
 	if (!dev_ser || !dev_ser->refcount) {
