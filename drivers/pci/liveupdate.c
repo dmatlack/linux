@@ -58,6 +58,8 @@
  *
  *  * The device must not be a Physical Function (PF).
  *
+ *  * The device must be the only device in its IOMMU group.
+ *
  * Preservation Behavior
  * =====================
  *
@@ -91,6 +93,7 @@
 
 #include <linux/bsearch.h>
 #include <linux/io.h>
+#include <linux/iommu.h>
 #include <linux/kexec_handover.h>
 #include <linux/kho/abi/pci.h>
 #include <linux/liveupdate.h>
@@ -198,6 +201,31 @@ static void pci_ser_delete(struct pci_ser *ser, struct pci_dev_ser *dev_ser)
 	ser->nr_devices--;
 }
 
+static int count_devices(struct device *dev, void *__nr_devices)
+{
+	(*(int *)__nr_devices)++;
+	return 0;
+}
+
+static int pci_liveupdate_validate_iommu_group(struct pci_dev *dev)
+{
+	struct iommu_group *group;
+	int nr_devices = 0;
+
+	group = iommu_group_get(&dev->dev);
+	if (group) {
+		iommu_group_for_each_dev(group, &nr_devices, count_devices);
+		iommu_group_put(group);
+	}
+
+	if (nr_devices != 1) {
+		pci_warn(dev, "Live Update preserved devices must be in singleton iommu groups!\n");
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
 static void __pci_liveupdate_unpreserve(struct pci_ser *ser, struct pci_dev *dev)
 {
 	struct pci_dev *upstream_bridge = dev->bus->self;
@@ -219,12 +247,16 @@ static void __pci_liveupdate_unpreserve(struct pci_ser *ser, struct pci_dev *dev
 static int pci_liveupdate_preserve_one(struct pci_ser *ser, struct pci_dev *dev)
 {
 	struct pci_dev_ser new = INIT_PCI_DEV_SER(dev);
-	int i;
+	int ret, i;
 
 	if (dev->liveupdate_outgoing) {
 		dev->liveupdate_outgoing->refcount++;
 		return 0;
 	}
+
+	ret = pci_liveupdate_validate_iommu_group(dev);
+	if (ret)
+		return ret;
 
 	if (ser->nr_devices == ser->max_nr_devices)
 		return -ENOSPC;
