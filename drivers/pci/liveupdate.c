@@ -136,6 +136,7 @@
 
 #include <linux/bsearch.h>
 #include <linux/io.h>
+#include <linux/iommu.h>
 #include <linux/kexec_handover.h>
 #include <linux/kho/abi/pci.h>
 #include <linux/liveupdate.h>
@@ -350,6 +351,11 @@ int pci_liveupdate_preserve(struct pci_dev *dev)
 
 	if (dev->is_virtfn)
 		return -EINVAL;
+
+	if (!pci_device_group_immutable_singleton(dev)) {
+		pci_warn(dev, "Device preservation limited to immutable singleton iommu groups\n");
+		return -EINVAL;
+	}
 
 	if (dev->liveupdate_outgoing)
 		return -EBUSY;
