@@ -240,6 +240,7 @@ int pci_liveupdate_preserve(struct pci_dev *dev)
 
 	ser->devices[i] = new;
 	ser->nr_devices++;
+	dev->liveupdate_outgoing = &ser->devices[i];
 	return 0;
 }
 EXPORT_SYMBOL_GPL(pci_liveupdate_preserve);
@@ -257,13 +258,14 @@ void pci_liveupdate_unpreserve(struct pci_dev *dev)
 	if (WARN_ON_ONCE(ret) || WARN_ON_ONCE(!ser))
 		return;
 
-	dev_ser = pci_ser_find(ser, dev);
+	dev_ser = dev->liveupdate_outgoing;
 	if (!dev_ser) {
 		pci_WARN_ONCE(dev, true, "Device is not preserved!");
 		return;
 	}
 
 	pci_ser_delete(ser, dev_ser);
+	dev->liveupdate_outgoing = NULL;
 }
 EXPORT_SYMBOL_GPL(pci_liveupdate_unpreserve);
 
