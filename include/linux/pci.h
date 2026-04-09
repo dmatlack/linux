@@ -40,6 +40,8 @@
 #include <linux/resource_ext.h>
 #include <linux/msi_api.h>
 #include <uapi/linux/pci.h>
+#include <linux/liveupdate.h>
+#include <linux/kho/abi/pci.h>
 
 #include <linux/pci_ids.h>
 
@@ -590,6 +592,9 @@ struct pci_dev {
 	u16		tph_cap;	/* TPH capability offset */
 	u8		tph_mode;	/* TPH mode */
 	u8		tph_req_type;	/* TPH requester type */
+#endif
+#ifdef CONFIG_PCI_LIVEUPDATE
+	struct pci_dev_ser *liveupdate_incoming; /* State preserved by previous kernel */
 #endif
 };
 
@@ -2878,6 +2883,11 @@ void pci_liveupdate_unregister_flb(struct liveupdate_file_handler *fh);
 int pci_liveupdate_preserve(struct pci_dev *dev);
 void pci_liveupdate_unpreserve(struct pci_dev *dev);
 void pci_liveupdate_finish(struct pci_dev *dev);
+
+static inline struct pci_dev_ser *pci_liveupdate_incoming(struct pci_dev *dev)
+{
+	return dev->liveupdate_incoming;
+}
 #else
 static inline int pci_liveupdate_register_flb(struct liveupdate_file_handler *fh)
 {
@@ -2899,6 +2909,11 @@ static inline void pci_liveupdate_unpreserve(struct pci_dev *dev)
 
 static inline void pci_liveupdate_finish(struct pci_dev *dev)
 {
+}
+
+static inline struct pci_dev_ser *pci_liveupdate_incoming(struct pci_dev *dev)
+{
+	return NULL;
 }
 #endif
 
