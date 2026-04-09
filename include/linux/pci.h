@@ -595,6 +595,7 @@ struct pci_dev {
 #endif
 #ifdef CONFIG_PCI_LIVEUPDATE
 	struct pci_dev_ser *liveupdate_outgoing; /* State preserved for next kernel */
+	struct pci_dev_ser *liveupdate_incoming; /* State preserved by previous kernel */
 #endif
 };
 
@@ -2882,10 +2883,16 @@ void pci_liveupdate_unregister_flb(struct liveupdate_file_handler *fh);
 
 int pci_liveupdate_preserve(struct pci_dev *dev);
 void pci_liveupdate_unpreserve(struct pci_dev *dev);
+void pci_liveupdate_finish(struct pci_dev *dev);
 
 static inline struct pci_dev_ser *pci_liveupdate_outgoing(struct pci_dev *dev)
 {
 	return dev->liveupdate_outgoing;
+}
+
+static inline struct pci_dev_ser *pci_liveupdate_incoming(struct pci_dev *dev)
+{
+	return dev->liveupdate_incoming;
 }
 #else
 static inline int pci_liveupdate_register_flb(struct liveupdate_file_handler *fh)
@@ -2906,7 +2913,16 @@ static inline void pci_liveupdate_unpreserve(struct pci_dev *dev)
 {
 }
 
+static inline void pci_liveupdate_finish(struct pci_dev *dev)
+{
+}
+
 static inline struct pci_dev_ser *pci_liveupdate_outgoing(struct pci_dev *dev)
+{
+	return NULL;
+}
+
+static inline struct pci_dev_ser *pci_liveupdate_incoming(struct pci_dev *dev)
 {
 	return NULL;
 }

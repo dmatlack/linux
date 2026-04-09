@@ -56,6 +56,20 @@
  * This allows the PCI core to keep it's FLB data (struct pci_ser) up to date
  * with the list of **outgoing** preserved devices for the next kernel.
  *
+ * After kexec, whenever a device is enumerated, the PCI core will check if it
+ * is an **incoming** preserved device (i.e. preserved by the previous kernel)
+ * by checking the incoming FLB data (struct pci_ser).
+ *
+ * Drivers must notify the PCI core when an **incoming** device is done
+ * participating in the incoming Live Update with the following API:
+ *
+ *  * ``pci_liveupdate_finish(pci_dev)``
+ *
+ * The PCI core does not enforce any ordering of ``pci_liveupdate_finish()`` and
+ * ``pci_liveupdate_preserve()``. i.e. A PCI device can be **outgoing**
+ * (preserved for next kernel) and **incoming** (preserved by previous kernel)
+ * at the same time.
+ *
  * Restrictions
  * ============
  *
@@ -75,7 +89,40 @@
 #include <linux/pci.h>
 #include <linux/sort.h>
 
+#include "pci.h"
+
 static DEFINE_MUTEX(pci_flb_outgoing_lock);
+
+#define INIT_PCI_DEV_SER(_dev) (struct pci_dev_ser ) {	\
+	.domain = pci_domain_nr((_dev)->bus),		\
+	.bdf = pci_dev_id(_dev),			\
+	.refcount = 1,					\
+}
+
+static int pci_dev_ser_cmp(const void *__a, const void *__b)
+{
+	const struct pci_dev_ser *a = __a, *b = __b;
+
+	/*
+	 * If the refcount is zero then set bit 63 so all the "empty" elements
+	 * of the array get sorted to the end by pci_ser_sort() and then
+	 * pci_ser_find() can just binary search the non-empty elements.
+	 */
+	u64 a_int = ((u64)!a->refcount << 63) | (u64)a->domain << 16 | a->bdf;
+	u64 b_int = ((u64)!b->refcount << 63) | (u64)b->domain << 16 | b->bdf;
+
+	return cmp_int(a_int, b_int);
+}
+
+static struct pci_dev_ser *pci_ser_find(struct pci_ser *ser,
+					struct pci_dev *dev)
+{
+	const struct pci_dev_ser key = INIT_PCI_DEV_SER(dev);
+
+	return bsearch(&key, ser->devices, ser->nr_devices,
+		       sizeof(key), pci_dev_ser_cmp);
+}
+
 
 static int pci_flb_preserve(struct liveupdate_flb_op_args *args)
 {
@@ -118,7 +165,17 @@ static void pci_flb_unpreserve(struct liveupdate_flb_op_args *args)
 
 static int pci_flb_retrieve(struct liveupdate_flb_op_args *args)
 {
-	args->obj = phys_to_virt(args->data);
+	struct pci_ser *ser = phys_to_virt(args->data);
+
+	/*
+	 * Sort the devices array so that pci_liveupdate_setup_device() can
+	 * use binary search to check if devices are preserved. Sort the entire
+	 * array (ser->max_nr_devices) since it may be sparse.
+	 */
+	sort(ser->devices, ser->max_nr_devices, sizeof(ser->devices[0]),
+	     pci_dev_ser_cmp, NULL);
+
+	args->obj = ser;
 	return 0;
 }
 
@@ -177,9 +234,7 @@ int pci_liveupdate_preserve(struct pci_dev *dev)
 
 		ser->nr_devices++;
 
-		dev_ser->domain = pci_domain_nr(dev->bus);
-		dev_ser->bdf = pci_dev_id(dev);
-		dev_ser->refcount = 1;
+		*dev_ser = INIT_PCI_DEV_SER(dev);
 
 		dev->liveupdate_outgoing = dev_ser;
 		return 0;
@@ -217,6 +272,105 @@ void pci_liveupdate_unpreserve(struct pci_dev *dev)
 	dev->liveupdate_outgoing = NULL;
 }
 EXPORT_SYMBOL_GPL(pci_liveupdate_unpreserve);
+
+static struct pci_ser *pci_liveupdate_flb_get_incoming(void)
+{
+	void *ser;
+	int ret;
+
+	ret = liveupdate_flb_get_incoming(&pci_liveupdate_flb, &ser);
+
+	/* Live Update is not enabled. */
+	if (ret == -EOPNOTSUPP)
+		return NULL;
+
+	/* Live Update is enabled, but there is no incoming FLB data. */
+	if (ret == -ENODATA)
+		return NULL;
+
+	/*
+	 * Live Update is enabled and there is incoming FLB data, but none of it
+	 * matches pci_liveupdate_flb.compatible.
+	 *
+	 * This could mean that no PCI FLB data was passed by the previous
+	 * kernel, but it could also mean the previous kernel used a different
+	 * compatibility string (i.e. a different ABI). The latter deserves at
+	 * least a WARN_ON_ONCE() but it cannot be distinguished from the
+	 * former.
+	 */
+	if (ret == -ENOENT) {
+		pr_info_once("PCI: No Live Update incoming FLB matched %s",
+			     pci_liveupdate_flb.compatible);
+		return NULL;
+	}
+
+	/*
+	 * There is incoming FLB data that matches pci_liveupdate_flb.compatible
+	 * but it cannot be retrieved. Proceed with standard initialization as
+	 * if there was no incoming PCI FLB data.
+	 */
+	if (ret) {
+		WARN_ONCE(ret, "PCI: Failed to retrieve incoming FLB data during Live Update");
+		return NULL;
+	}
+
+	return ser;
+}
+
+static void pci_liveupdate_flb_put_incoming(void)
+{
+	liveupdate_flb_put_incoming(&pci_liveupdate_flb);
+}
+
+void pci_liveupdate_setup_device(struct pci_dev *dev)
+{
+	struct pci_dev_ser *dev_ser;
+	struct pci_ser *ser;
+
+	ser = pci_liveupdate_flb_get_incoming();
+	if (!ser)
+		return;
+
+	dev_ser = pci_ser_find(ser, dev);
+	if (!dev_ser || !dev_ser->refcount) {
+		pci_liveupdate_flb_put_incoming();
+		return;
+	}
+
+	/*
+	 * Hold the ref on the incoming FLB until pci_liveupdate_finish() so
+	 * that dev_ser does not get freed while it is in use.
+	 */
+	dev->liveupdate_incoming = dev_ser;
+}
+
+void pci_liveupdate_cleanup_device(struct pci_dev *dev)
+{
+	/*
+	 * Note: This cannot race with pci_liveupdate_finish() since it is only
+	 * called in cleanup paths when there are no users of the pci_dev.
+	 */
+	if (dev->liveupdate_incoming)
+		pci_liveupdate_flb_put_incoming();
+}
+
+void pci_liveupdate_finish(struct pci_dev *dev)
+{
+	if (!dev->liveupdate_incoming) {
+		pci_warn(dev, "Cannot finish preserving an unpreserved device\n");
+		return;
+	}
+
+	/*
+	 * Drop the refcount so this device does not get treated as an incoming
+	 * device again, e.g. in case pci_liveupdate_setup_device() gets called
+	 * again becase the device is hot-plugged.
+	 */
+	dev->liveupdate_incoming->refcount = 0;
+	dev->liveupdate_incoming = NULL;
+	pci_liveupdate_flb_put_incoming();
+}
+EXPORT_SYMBOL_GPL(pci_liveupdate_finish);
 
 int pci_liveupdate_register_flb(struct liveupdate_file_handler *fh)
 {
