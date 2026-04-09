@@ -96,6 +96,8 @@
 #include <linux/pci.h>
 #include <linux/sort.h>
 
+#include "pci.h"
+
 static DEFINE_MUTEX(pci_flb_outgoing_lock);
 
 static int pci_flb_preserve(struct liveupdate_flb_op_args *args)
@@ -256,8 +258,87 @@ void pci_liveupdate_unpreserve(struct pci_dev *dev)
 }
 EXPORT_SYMBOL_GPL(pci_liveupdate_unpreserve);
 
+static struct pci_ser *pci_liveupdate_flb_get_incoming(void)
+{
+	void *ser;
+	int ret;
+
+	ret = liveupdate_flb_get_incoming(&pci_liveupdate_flb, &ser);
+
+	/* Live Update is not enabled. */
+	if (ret == -EOPNOTSUPP)
+		return NULL;
+
+	/* Live Update is enabled, but there is no incoming FLB data. */
+	if (ret == -ENODATA)
+		return NULL;
+
+	/*
+	 * Live Update is enabled and there is incoming FLB data, but none of it
+	 * matches pci_liveupdate_flb.compatible.
+	 *
+	 * This could mean that no PCI FLB data was passed by the previous
+	 * kernel, but it could also mean the previous kernel used a different
+	 * compatibility string (i.e. a different ABI). The latter deserves at
+	 * least a WARN_ON_ONCE() but it cannot be distinguished from the
+	 * former.
+	 */
+	if (ret == -ENOENT) {
+		pr_info_once("PCI: No Live Update incoming FLB matched %s",
+			     pci_liveupdate_flb.compatible);
+		return NULL;
+	}
+
+	/*
+	 * There is incoming FLB data that matches pci_liveupdate_flb.compatible
+	 * but it cannot be retrieved. Proceed with standard initialization as
+	 * if there was no incoming PCI FLB data.
+	 */
+	if (ret) {
+		WARN_ONCE(ret, "PCI: Failed to retrieve incoming FLB data during Live Update");
+		return NULL;
+	}
+
+	return ser;
+}
+
+static void pci_liveupdate_flb_put_incoming(void)
+{
+	liveupdate_flb_put_incoming(&pci_liveupdate_flb);
+}
+
+void pci_liveupdate_setup_device(struct pci_dev *dev)
+{
+	struct pci_dev_ser *dev_ser;
+	struct pci_ser *ser;
+
+	ser = pci_liveupdate_flb_get_incoming();
+	if (!ser)
+		return;
+
+	dev_ser = pci_ser_find(ser, dev);
+	if (!dev_ser || dev_ser->finished) {
+		pci_liveupdate_flb_put_incoming();
+		return;
+	}
+
+	/*
+	 * Hold the ref on the incoming FLB until pci_liveupdate_finish() so
+	 * that dev_ser does not get freed while it is in use.
+	 */
+	dev->liveupdate_incoming = dev_ser;
+}
+
 void pci_liveupdate_finish(struct pci_dev *dev)
 {
+	/*
+	 * Mark the serialized state as finished so it does not get reassociated
+	 * with this device again, e.g. if the device it hot-unplugged and then
+	 * hot-plugged.
+	 */
+	dev->liveupdate_incoming->finished = true;
+	dev->liveupdate_incoming = NULL;
+	pci_liveupdate_flb_put_incoming();
 }
 EXPORT_SYMBOL_GPL(pci_liveupdate_finish);
 

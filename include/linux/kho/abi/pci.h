@@ -23,19 +23,23 @@
  * incrementing the version number in the PCI_LUO_FLB_COMPATIBLE string.
  */
 
-#define PCI_LUO_FLB_COMPATIBLE "pci-v1"
+#define PCI_LUO_FLB_COMPATIBLE "pci-v2"
 
 /**
  * struct pci_dev_ser - Serialized state about a single PCI device.
  *
  * @domain: The device's PCI domain number (segment).
  * @bdf: The device's PCI bus, device, and function number.
+ * @finished: Software state used by the PCI core to keep track of whether
+ *   it is done using a device's struct pci_dev_ser and thus should not be
+ *   associated with the device even if it is probed again in the future.
  * @reserved: Reserved (to naturally align struct pci_dev_ser).
  */
 struct pci_dev_ser {
 	u32 domain;
 	u16 bdf;
-	u16 reserved;
+	u8 finished;
+	u8 reserved;
 } __packed;
 
 /**
