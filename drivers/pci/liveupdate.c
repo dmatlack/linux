@@ -168,6 +168,7 @@ static struct liveupdate_flb pci_liveupdate_flb = {
 #define INIT_PCI_DEV_SER(_dev) {		\
 	.domain = pci_domain_nr((_dev)->bus),	\
 	.bdf = pci_dev_id(_dev),		\
+	.refcount = 1,				\
 }
 
 static int pci_dev_ser_cmp(const void *__a, const void *__b)
@@ -197,24 +198,33 @@ static void pci_ser_delete(struct pci_ser *ser, struct pci_dev_ser *dev_ser)
 	ser->nr_devices--;
 }
 
-int pci_liveupdate_preserve(struct pci_dev *dev)
+static void __pci_liveupdate_unpreserve(struct pci_ser *ser, struct pci_dev *dev)
+{
+	struct pci_dev *upstream_bridge = dev->bus->self;
+	struct pci_dev_ser *dev_ser;
+
+	if (upstream_bridge)
+		__pci_liveupdate_unpreserve(ser, upstream_bridge);
+
+	dev_ser = dev->liveupdate_outgoing;
+	if (!dev_ser) {
+		pci_WARN_ONCE(dev, true, "Device is not preserved!");
+		return;
+	}
+
+	if (--dev_ser->refcount == 0)
+		pci_ser_delete(ser, dev_ser);
+}
+
+static int pci_liveupdate_preserve_one(struct pci_ser *ser, struct pci_dev *dev)
 {
 	struct pci_dev_ser new = INIT_PCI_DEV_SER(dev);
-	struct pci_ser *ser;
-	int i, ret;
+	int i;
 
-	/* SR-IOV is not supported yet. */
-	if (dev->is_virtfn || dev->is_physfn)
-		return -EINVAL;
-
-	guard(mutex)(&pci_flb_outgoing_lock);
-
-	ret = liveupdate_flb_get_outgoing(&pci_liveupdate_flb, (void **)&ser);
-	if (ret)
-		return ret;
-
-	if (!ser)
-		return -ENOENT;
+	if (dev->liveupdate_outgoing) {
+		dev->liveupdate_outgoing->refcount++;
+		return 0;
+	}
 
 	if (ser->nr_devices == ser->max_nr_devices)
 		return -ENOSPC;
@@ -237,11 +247,58 @@ int pci_liveupdate_preserve(struct pci_dev *dev)
 	dev->liveupdate_outgoing = &ser->devices[i];
 	return 0;
 }
+
+static int __pci_liveupdate_preserve(struct pci_ser *ser, struct pci_dev *dev)
+{
+	struct pci_dev *upstream_bridge = dev->bus->self;
+	int ret = 0;
+
+	/* SR-IOV is not yet supported. */
+	if (dev->is_virtfn || dev->is_physfn)
+		return -EINVAL;
+
+	if (upstream_bridge) {
+		ret = __pci_liveupdate_preserve(ser, upstream_bridge);
+		if (ret)
+			return ret;
+	} else if (!pci_is_root_bus(dev->bus)) {
+		pci_err(dev, "Failed to preserve up to root port\n");
+		return -EINVAL;
+	}
+
+	ret = pci_liveupdate_preserve_one(ser, dev);
+	if (ret)
+		goto err;
+
+	return 0;
+
+err:
+	if (upstream_bridge)
+		__pci_liveupdate_unpreserve(ser, upstream_bridge);
+
+	return ret;
+}
+
+int pci_liveupdate_preserve(struct pci_dev *dev)
+{
+	struct pci_ser *ser;
+	int ret;
+
+	guard(mutex)(&pci_flb_outgoing_lock);
+
+	ret = liveupdate_flb_get_outgoing(&pci_liveupdate_flb, (void **)&ser);
+	if (ret)
+		return ret;
+
+	if (!ser)
+		return -ENOENT;
+
+	return __pci_liveupdate_preserve(ser, dev);
+}
 EXPORT_SYMBOL_GPL(pci_liveupdate_preserve);
 
 void pci_liveupdate_unpreserve(struct pci_dev *dev)
 {
-	struct pci_dev_ser *dev_ser;
 	struct pci_ser *ser;
 	int ret;
 
@@ -252,14 +309,7 @@ void pci_liveupdate_unpreserve(struct pci_dev *dev)
 	if (WARN_ON_ONCE(ret) || WARN_ON_ONCE(!ser))
 		return;
 
-	dev_ser = dev->liveupdate_outgoing;
-	if (!dev_ser) {
-		pci_WARN_ONCE(dev, true, "Device is not preserved!");
-		return;
-	}
-
-	pci_ser_delete(ser, dev_ser);
-	dev->liveupdate_outgoing = NULL;
+	__pci_liveupdate_unpreserve(ser, dev);
 }
 EXPORT_SYMBOL_GPL(pci_liveupdate_unpreserve);
 
@@ -337,7 +387,7 @@ void pci_liveupdate_setup_device(struct pci_dev *dev)
 	dev->liveupdate_inherit_buses = true;
 
 	dev_ser = pci_ser_find(ser, dev);
-	if (!dev_ser || dev_ser->finished) {
+	if (!dev_ser || !dev_ser->refcount) {
 		pci_liveupdate_flb_put_incoming();
 		return;
 	}
@@ -351,12 +401,19 @@ void pci_liveupdate_setup_device(struct pci_dev *dev)
 
 void pci_liveupdate_finish(struct pci_dev *dev)
 {
+	struct pci_dev *upstream_bridge = dev->bus->self;
+
+	if (upstream_bridge)
+		pci_liveupdate_finish(upstream_bridge);
+
 	/*
-	 * Mark the serialized state as finished so it does not get reassociated
-	 * with this device again, e.g. if the device it hot-unplugged and then
+	 * Decrement the refcount so it does not get reassociated with this
+	 * device again, e.g. if the device it hot-unplugged and then
 	 * hot-plugged.
 	 */
-	dev->liveupdate_incoming->finished = true;
+	if (--dev->liveupdate_incoming->refcount)
+		return;
+
 	dev->liveupdate_incoming = NULL;
 	pci_liveupdate_flb_put_incoming();
 }

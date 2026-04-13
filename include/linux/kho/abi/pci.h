@@ -30,16 +30,16 @@
  *
  * @domain: The device's PCI domain number (segment).
  * @bdf: The device's PCI bus, device, and function number.
- * @finished: Software state used by the PCI core to keep track of whether
- *   it is done using a device's struct pci_dev_ser and thus should not be
- *   associated with the device even if it is probed again in the future.
  * @reserved: Reserved (to naturally align struct pci_dev_ser).
+ * @refcount: Reference count used by the PCI core to keep track of whether it
+ *   is done using a device's struct pci_dev_ser. Once the refcount reaches zero
+ *   the state will not be associated with the device even if it is probed again
+ *   in the future (e.g. due to hotplug).
  */
 struct pci_dev_ser {
 	u32 domain;
 	u16 bdf;
-	u8 finished;
-	u8 reserved;
+	u16 refcount;
 } __packed;
 
 /**
