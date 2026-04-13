@@ -106,6 +106,18 @@
  * If a misconfigured or unconfigured bridge is encountered during enumeration
  * while there are incoming preserved devices, it's secondary and subordinate
  * bus numbers will be cleared and devices below it will not be enumerated.
+ *
+ * PCI-to-PCI Bridges
+ * ==================
+ *
+ * Any PCI-to-PCI bridges upstream of a preserved device are automatically
+ * preserved when the device is preserved. The PCI core keeps track of the
+ * number of downstream devices that are preserved under a bridge so that the
+ * bridge is only unpreserved once all downstream devices are unpreserved.
+ *
+ * This enables the PCI core and any drivers bound to the bridge to participate
+ * in the Live Update so that preserved endpoints can continue issuing memory
+ * transactions during the Live Update.
  */
 
 #include <linux/bsearch.h>
@@ -226,25 +238,14 @@ static struct liveupdate_flb pci_liveupdate_flb = {
 	.compatible = PCI_LUO_FLB_COMPATIBLE,
 };
 
-int pci_liveupdate_preserve(struct pci_dev *dev)
+static int pci_liveupdate_preserve_device(struct pci_ser *ser, struct pci_dev *dev)
 {
-	struct pci_ser *ser;
-	int i, ret;
+	int i;
 
-	guard(mutex)(&pci_flb_outgoing_lock);
-
-	ret = liveupdate_flb_get_outgoing(&pci_liveupdate_flb, (void **)&ser);
-	if (ret)
-		return ret;
-
-	if (!ser)
-		return -ENOENT;
-
-	if (dev->is_virtfn)
-		return -EINVAL;
-
-	if (dev->liveupdate_outgoing)
-		return -EBUSY;
+	if (dev->liveupdate_outgoing) {
+		dev->liveupdate_outgoing->refcount++;
+		return 0;
+	}
 
 	if (ser->nr_devices == ser->max_nr_devices)
 		return -ENOSPC;
@@ -271,11 +272,80 @@ int pci_liveupdate_preserve(struct pci_dev *dev)
 
 	return -ENOSPC;
 }
+
+static void pci_liveupdate_unpreserve_path(struct pci_ser *ser, struct pci_dev *dev)
+{
+	struct pci_dev *upstream_bridge = dev->bus->self;
+	struct pci_dev_ser *dev_ser;
+
+	if (upstream_bridge)
+		pci_liveupdate_unpreserve_path(ser, upstream_bridge);
+
+	dev_ser = dev->liveupdate_outgoing;
+	if (!dev_ser) {
+		pci_warn(dev, "Cannot unpreserve device that is not preserved\n");
+		return;
+	}
+
+	if (--dev_ser->refcount == 0) {
+		memset(dev_ser, 0, sizeof(*dev_ser));
+		dev->liveupdate_outgoing = NULL;
+	}
+}
+
+static int pci_liveupdate_preserve_path(struct pci_ser *ser, struct pci_dev *dev)
+{
+	struct pci_dev *upstream_bridge = dev->bus->self;
+	int ret = 0;
+
+	if (upstream_bridge) {
+		ret = pci_liveupdate_preserve_path(ser, upstream_bridge);
+		if (ret)
+			return ret;
+	} else if (!pci_is_root_bus(dev->bus)) {
+		pci_err(dev, "Failed to preserve up to root port\n");
+		return -EINVAL;
+	}
+
+	ret = pci_liveupdate_preserve_device(ser, dev);
+	if (ret)
+		goto err;
+
+	return 0;
+
+err:
+	if (upstream_bridge)
+		pci_liveupdate_unpreserve_path(ser, upstream_bridge);
+
+	return ret;
+}
+
+int pci_liveupdate_preserve(struct pci_dev *dev)
+{
+	struct pci_ser *ser;
+	int ret;
+
+	guard(mutex)(&pci_flb_outgoing_lock);
+
+	ret = liveupdate_flb_get_outgoing(&pci_liveupdate_flb, (void **)&ser);
+	if (ret)
+		return ret;
+
+	if (!ser)
+		return -ENOENT;
+
+	if (dev->is_virtfn)
+		return -EINVAL;
+
+	if (dev->liveupdate_outgoing)
+		return -EBUSY;
+
+	return pci_liveupdate_preserve_path(ser, dev);
+}
 EXPORT_SYMBOL_GPL(pci_liveupdate_preserve);
 
 void pci_liveupdate_unpreserve(struct pci_dev *dev)
 {
-	struct pci_dev_ser *dev_ser;
 	struct pci_ser *ser = NULL;
 	int ret;
 
@@ -286,19 +356,9 @@ void pci_liveupdate_unpreserve(struct pci_dev *dev)
 	if (ret || !ser) {
 		pci_warn(dev, "Cannot unpreserve device without outgoing Live Update state\n");
 		return;
-
-	}
-	if (WARN_ON_ONCE(ret) || WARN_ON_ONCE(!ser))
-		return;
-
-	dev_ser = dev->liveupdate_outgoing;
-	if (!dev_ser) {
-		pci_warn(dev, "Cannot unpreserve device that is not preserved\n");
-		return;
 	}
 
-	memset(dev_ser, 0, sizeof(*dev_ser));
-	dev->liveupdate_outgoing = NULL;
+	pci_liveupdate_unpreserve_path(ser, dev);
 }
 EXPORT_SYMBOL_GPL(pci_liveupdate_unpreserve);
 
@@ -398,6 +458,24 @@ void pci_liveupdate_cleanup_device(struct pci_dev *dev)
 		pci_liveupdate_flb_put_incoming();
 }
 
+static void pci_liveupdate_finish_path(struct pci_dev *dev)
+{
+	struct pci_dev *upstream_bridge = dev->bus->self;
+
+	if (upstream_bridge)
+		pci_liveupdate_finish(upstream_bridge);
+
+	/*
+	 * Decrement the refcount so this device does not get treated as an
+	 * incoming device again, e.g. in case pci_liveupdate_setup_device()
+	 * gets called again becase the device is hot-plugged.
+	 */
+	if (--dev->liveupdate_incoming->refcount)
+		return;
+
+	dev->liveupdate_incoming = NULL;
+}
+
 void pci_liveupdate_finish(struct pci_dev *dev)
 {
 	if (!dev->liveupdate_incoming) {
@@ -405,13 +483,7 @@ void pci_liveupdate_finish(struct pci_dev *dev)
 		return;
 	}
 
-	/*
-	 * Drop the refcount so this device does not get treated as an incoming
-	 * device again, e.g. in case pci_liveupdate_setup_device() gets called
-	 * again becase the device is hot-plugged.
-	 */
-	dev->liveupdate_incoming->refcount = 0;
-	dev->liveupdate_incoming = NULL;
+	pci_liveupdate_finish_path(dev);
 	pci_liveupdate_flb_put_incoming();
 }
 EXPORT_SYMBOL_GPL(pci_liveupdate_finish);
