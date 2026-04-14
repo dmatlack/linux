@@ -733,6 +733,14 @@ static void pcie_portdrv_remove(struct pci_dev *dev)
 
 	pcie_port_device_remove(dev);
 
+	/*
+	 * Do not disable bus mastering on the bridge during Live Update if
+	 * a downstream device is preserved since that would prevent the bridge
+	 * from forwarding memory transactions uptream.
+	 */
+	if (pci_liveupdate_outgoing(dev))
+		return;
+
 	pci_disable_device(dev);
 }
 
