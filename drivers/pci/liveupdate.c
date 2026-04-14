@@ -128,6 +128,10 @@
  *  * The PCI core does not disable bus mastering on outoing preserved devices
  *    during kexec. This allows preserved devices to issue memory transactions
  *    throughout the Live Update.
+ *
+ *  * The PCI core inherits all ACS flags enabled on incoming preserved devices
+ *    rather than assigning new ones. This ensures that TLPs are routed the same
+ *    way after Live Update and ensures that IOMMU groups do not change.
  */
 
 #include <linux/bsearch.h>
