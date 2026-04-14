@@ -1042,7 +1042,19 @@ void pci_enable_acs(struct pci_dev *dev)
 			 ~(PCI_ACS_RR | PCI_ACS_CR | PCI_ACS_EC));
 	__pci_config_acs(dev, &caps, config_acs_param, 0, 0);
 
-	pci_write_config_word(dev, pos + PCI_ACS_CTRL, caps.ctrl);
+	/*
+	 * ACS flags must be inherited from the previous kernel during a Live
+	 * Update for preserved devices (which includes endpoints and any
+	 * upstream bridges) to avoid changing routing while memory transactions
+	 * are in flight.
+	 */
+	if (pci_liveupdate_incoming(dev)) {
+		if (caps.ctrl != caps.fw_ctrl)
+			pci_err(dev, "Attempted to change ACS flags during Live Update: 0x%x 0x%x\n",
+				caps.ctrl, caps.fw_ctrl);
+	} else {
+		pci_write_config_word(dev, pos + PCI_ACS_CTRL, caps.ctrl);
+	}
 }
 
 /**
