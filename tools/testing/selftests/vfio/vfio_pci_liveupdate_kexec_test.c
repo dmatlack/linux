@@ -166,8 +166,8 @@ static void check_open_vfio_device_fails(void)
 		iommu = iommu_init(iommu_modes[i].name);
 
 		device = vfio_pci_device_alloc(device_bdf, iommu);
-		vfio_pci_group_setup(device);
-		vfio_pci_iommu_setup(device);
+		vfio_pci_group_setup(device, device_bdf);
+		vfio_container_set_iommu(device);
 
 		printf("Checking ioctl(group_fd, VFIO_GROUP_GET_DEVICE_FD, \"%s\") fails (%s)\n",
 		       device_bdf, iommu_modes[i].name);
