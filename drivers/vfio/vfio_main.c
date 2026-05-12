@@ -1801,7 +1801,7 @@ struct vfio_device *vfio_find_device(const void *data, device_match_t match)
 {
 	struct device *device;
 
-	device = class_find_device(vfio.device_class, NULL, data, match);
+	device = class_find_device(&vfio_device_class, NULL, data, match);
 	if (!device)
 		return NULL;
 

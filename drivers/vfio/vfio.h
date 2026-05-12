@@ -468,7 +468,7 @@ static inline bool vfio_liveupdate_incoming_is_preserved(struct vfio_device *dev
 	struct device *d = device->dev;
 
 	if (dev_is_pci(d))
-		return to_pci_dev(d)->liveupdate_incoming;
+		return pci_liveupdate_is_incoming(to_pci_dev(d));
 
 	return false;
 }
