@@ -1949,7 +1949,9 @@ int pci_save_state(struct pci_dev *dev)
 	pci_save_ptm_state(dev);
 	pci_save_tph_state(dev);
 	pci_save_acs_state(dev);
-	return pci_save_vc_state(dev);
+	pci_save_vc_state(dev);
+
+	return 0;
 }
 EXPORT_SYMBOL(pci_save_state);
 
@@ -3727,16 +3729,16 @@ int pci_add_ext_cap_save_buffer(struct pci_dev *dev, u16 cap, unsigned int size)
 }
 
 /**
- * pci_allocate_cap_save_buffers - allocate buffers for saving capabilities
+ * pci_reserve_saved_caps - reserve room to save capability registers
  * @dev: the PCI device
  */
-void pci_allocate_cap_save_buffers(struct pci_dev *dev)
+void pci_reserve_saved_caps(struct pci_dev *dev)
 {
 	pci_reserve_pcie_state(dev);
 	pci_reserve_pcix_state(dev);
 	pci_reserve_ltr_state(dev);
 	pci_reserve_acs_state(dev);
-	pci_allocate_vc_save_buffers(dev);
+	pci_reserve_vc_state(dev);
 }
 
 void pci_free_cap_save_buffers(struct pci_dev *dev)
