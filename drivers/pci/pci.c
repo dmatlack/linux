@@ -1091,7 +1091,9 @@ static void pci_reserve_acs_state(struct pci_dev *dev)
  * @dev: the PCI device
  *
  * Record the ACS configuration currently programmed in hardware so that
- * pci_restore_acs_state() can reapply it after a reset.
+ * pci_restore_acs_state() can reapply it after a reset. pci_save_state()
+ * saves these registers along with every other reserved register, so this is
+ * only needed to refresh them outside of pci_save_state().
  */
 static void pci_save_acs_state(struct pci_dev *dev)
 {
@@ -1786,8 +1788,8 @@ int pci_set_power_state_locked(struct pci_dev *dev, pci_power_t state)
 EXPORT_SYMBOL(pci_set_power_state_locked);
 
 /*
- * PCIe capability registers saved and restored by the PCI core. Registers a
- * device does not implement are skipped by the pcie_capability_*() accessors,
+ * PCIe capability registers reserved and restored by the PCI core.
+ * pcie_capability_write_word() skips registers the device does not implement,
  * so space is reserved for all of them regardless of the device.
  */
 static const u16 pcie_saved_regs[] = {
@@ -1820,24 +1822,6 @@ struct pci_cap_saved_state *pci_find_saved_cap(struct pci_dev *dev, char cap)
 struct pci_cap_saved_state *pci_find_saved_ext_cap(struct pci_dev *dev, u16 cap)
 {
 	return _pci_find_saved_cap(dev, cap, true);
-}
-
-static void pci_save_pcie_state(struct pci_dev *dev)
-{
-	unsigned int i;
-	u16 val;
-
-	if (!pci_is_pcie(dev))
-		return;
-
-	for (i = 0; i < ARRAY_SIZE(pcie_saved_regs); i++) {
-		pcie_capability_read_word(dev, pcie_saved_regs[i], &val);
-		pci_write_saved_cap_word(dev, dev->pcie_cap + pcie_saved_regs[i],
-					 val);
-	}
-
-	pci_save_aspm_l1ss_state(dev);
-	pci_save_ltr_state(dev);
 }
 
 static void pci_reserve_pcie_state(struct pci_dev *dev)
@@ -1890,17 +1874,6 @@ static void pci_restore_pcie_state(struct pci_dev *dev)
 	}
 }
 
-static void pci_save_pcix_state(struct pci_dev *dev)
-{
-	int pos;
-
-	pos = pci_find_capability(dev, PCI_CAP_ID_PCIX);
-	if (!pos)
-		return;
-
-	pci_save_cap_word(dev, pos + PCI_X_CMD);
-}
-
 static void pci_reserve_pcix_state(struct pci_dev *dev)
 {
 	int pos, rc;
@@ -1942,14 +1915,15 @@ int pci_save_state(struct pci_dev *dev)
 	}
 	dev->state_saved = true;
 
-	pci_save_pcie_state(dev);
-	pci_save_pcix_state(dev);
-	pci_save_dpc_state(dev);
-	pci_save_aer_state(dev);
-	pci_save_ptm_state(dev);
-	pci_save_tph_state(dev);
-	pci_save_acs_state(dev);
-	pci_save_vc_state(dev);
+	pci_save_caps(dev);
+
+	/*
+	 * L1SS is the one capability whose state does not live entirely in
+	 * this device's store: an endpoint's L1 substates only take effect if
+	 * its upstream port is programmed to match, so the two are saved and
+	 * restored together.
+	 */
+	pci_save_aspm_l1ss_state(dev);
 
 	return 0;
 }
