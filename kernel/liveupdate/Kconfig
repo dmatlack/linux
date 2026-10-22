@@ -69,15 +69,16 @@ config LIVEUPDATE
 
 	  If unsure, say N.
 
-config LIVEUPDATE_MEMFD
-	bool "Live update support for memfd"
+config LIVEUPDATE_SHMEM
+	bool "Live update support for shmem files"
 	depends on LIVEUPDATE
 	depends on MEMFD_CREATE
 	depends on SHMEM
 	default LIVEUPDATE
 	help
-	  Enable live update support for memfd regions. This allows preserving
-	  memfd-backed memory across kernel live updates.
+	  Enable live update support for shmem files, i.e. memfds created
+	  without MFD_HUGETLB. This allows preserving memfd-backed memory
+	  across kernel live updates.
 
 	  This can be used to back VM memory with memfds, allowing the guest
 	  memory to persist, or for other user workloads needing to preserve
