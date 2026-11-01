@@ -11,6 +11,12 @@
  *   lupci.marker=<bdf>                 Optional device whose config space is
  *                                      written to mark the phases of the test
  *                                      in a QEMU trace of config writes.
+ *   lupci.control_changes=<reg>[,...]  Optional. Registers that must change
+ *                                      across the Live Update on bridges above
+ *                                      control endpoints (and not above
+ *                                      preserved endpoints): "acs" for the ACS
+ *                                      controls, "ari" for ARI Forwarding
+ *                                      Enable.
  *
  * A <path> identifies a device independently of bus numbers: a device on the
  * root bus followed by the device.function of each device below it, e.g.
@@ -98,6 +104,7 @@ static int nr_before;
 static char opt_preserve[CMDLINE_SIZE];
 static char opt_control[CMDLINE_SIZE];
 static char opt_marker[CMDLINE_SIZE];
+static char opt_control_changes[CMDLINE_SIZE];
 
 /* Length of the prefix of @s that contains none of @reject (nolibc lacks strcspn). */
 static size_t span_until(const char *s, const char *reject)
@@ -156,6 +163,8 @@ static void parse_cmdline(void)
 	get_cmdline_option(cmdline, "lupci.preserve", opt_preserve, sizeof(opt_preserve));
 	get_cmdline_option(cmdline, "lupci.control", opt_control, sizeof(opt_control));
 	get_cmdline_option(cmdline, "lupci.marker", opt_marker, sizeof(opt_marker));
+	get_cmdline_option(cmdline, "lupci.control_changes", opt_control_changes,
+			   sizeof(opt_control_changes));
 
 	if (!opt_preserve[0])
 		ksft_exit_skip("No devices to preserve (lupci.preserve=)\n");
@@ -537,6 +546,24 @@ static uint16_t get_status(int fd, const char *bdf)
 
 static int nr_failures;
 
+/* Whether @reg is listed in lupci.control_changes. */
+static bool control_changes(const char *reg)
+{
+	const char *p = opt_control_changes;
+	size_t len;
+
+	while (*p) {
+		len = span_until(p, ",");
+		if (len == strlen(reg) && !strncmp(p, reg, len))
+			return true;
+		p += len;
+		if (*p == ',')
+			p++;
+	}
+
+	return false;
+}
+
 #define check(cond, fmt, ...) do {						\
 	if (!(cond)) {								\
 		ksft_print_msg("FAIL: " fmt "\n", ##__VA_ARGS__);		\
@@ -577,6 +604,14 @@ static void check_devices(const char *when, const struct pci_snapshot *taken)
 				check(!(now.command & PCI_COMMAND_MASTER),
 				      "%s: Bus Master still enabled on control device",
 				      dev->bdf);
+			if (dev->bridge && dev->acs && control_changes("acs"))
+				check(now.acs_ctrl != dev->acs_ctrl,
+				      "%s: ACS controls did not change (0x%04x)",
+				      dev->bdf, now.acs_ctrl);
+			if (dev->bridge && dev->pcie && control_changes("ari"))
+				check((now.devctl2 ^ dev->devctl2) & PCI_EXP_DEVCTL2_ARI,
+				      "%s: ARI Forwarding Enable did not change (DEVCTL2 0x%04x)",
+				      dev->bdf, now.devctl2);
 			continue;
 		}
 
