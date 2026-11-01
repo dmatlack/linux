@@ -21060,6 +21060,8 @@ F:	drivers/pci/liveupdate.c
 F:	drivers/pci/liveupdate.h
 F:	include/linux/kho/abi/pci.h
 F:	include/linux/pci_liveupdate.h
+F:	tools/testing/selftests/liveupdate/modules/liveupdate_pci_test.c
+F:	tools/testing/selftests/liveupdate/pci/
 
 PCI MSI DRIVER FOR ALTERA MSI IP
 L:	linux-pci@vger.kernel.org
