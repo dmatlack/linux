@@ -13,6 +13,29 @@ headers_dir=""
 initrd=""
 KEEP_WORKSPACE=0
 
+# A test named "foo" is either built from foo.c, or described by foo.vmtest.sh.
+# A test definition is sourced after $arch, $target and $workspace_dir are set,
+# and may override any of the following:
+#
+#   TEST_SRCS            C sources of the test binary, relative to $test_dir
+#   TEST_KCONFIGS        Extra Kconfig fragments, relative to $test_dir
+#   TEST_BUILD_NAME      Suffix of the default kernel build directory, so that
+#                        tests with different Kconfigs don't share a build
+#   TEST_QEMU_ARGS       Extra QEMU arguments
+#   TEST_CMDLINE         Extra command line for both kernels
+#   TEST_TIMEOUT         Timeout for the QEMU run
+#   test_check()         Host-side check, run after the test passes in the VM
+TEST_SRCS=()
+TEST_KCONFIGS=()
+TEST_BUILD_NAME=""
+TEST_QEMU_ARGS=()
+TEST_CMDLINE=""
+TEST_TIMEOUT="30s"
+
+function test_check() {
+	return 0
+}
+
 source "$test_dir/../kselftest/ktap_helpers.sh"
 
 function get_arch_conf() {
@@ -38,7 +61,7 @@ Options:
 	-d)	path to the kernel build directory (default: .luo_test_build.<arch>)
 	-j)	number of jobs for compilation
 	-t)	run test for target_arch (aarch64, x86_64)
-	-T)	test name to run (default: luo_kexec_simple)
+	-T)	test name to run, e.g. luo_kexec_simple or pci/root_port (default: luo_kexec_simple)
 	-w)	custom workspace directory (default: creates temp dir)
 	-k)	keep workspace directory after successful test
 	-h)	display this help
@@ -115,10 +138,11 @@ function build_kernel() {
 	local kconfig="$build_dir/.config"
 	local common_conf="$test_dir/config"
 	local arch_conf="$test_dir/config.$target_arch"
+	local test_confs=("${TEST_KCONFIGS[@]/#/$test_dir/}")
 
 	echo "# Building kernel in: $build_dir"
 
-	cat "$arch_conf" "$common_conf" | tee "$kconfig" > "$luo_config"
+	cat "$arch_conf" "$common_conf" "${test_confs[@]}" | tee "$kconfig" > "$luo_config"
 	$make_cmd olddefconfig
 
 	# verify that kernel confiration has all necessary options
@@ -133,7 +157,7 @@ function build_kernel() {
 function mkinitrd() {
 	local build_dir=$1
 	local kernel_path=$2
-	local test_name=$3
+	local test_srcs=("${TEST_SRCS[@]/#/$test_dir/}")
 
 	# Compile the test binary and the init process
 	"$CROSS_COMPILE"gcc -static -O2 -nostdinc -nostdlib \
@@ -141,7 +165,7 @@ function mkinitrd() {
 		-I "$kernel_dir/tools/include/nolibc" \
 		-I "$test_dir/lib/include" \
 		-o "$workspace_dir/test_binary" \
-		"$test_dir/$test_name.c" "$test_dir/lib/lu_utils.c"
+		"${test_srcs[@]}" "$test_dir/lib/lu_utils.c"
 
 	"$CROSS_COMPILE"gcc -s -static -Os -nostdinc -nostdlib		\
 			-fno-asynchronous-unwind-tables -fno-ident	\
@@ -183,18 +207,18 @@ function run_qemu() {
 	local kernel_path=$3
 	local serial="$workspace_dir/qemu.serial"
 
-	cmdline="$cmdline liveupdate=on panic=-1"
-
 	echo "# Serial Log: $serial"
-	timeout 30s \
+	timeout "$TEST_TIMEOUT" \
 	$qemu_cmd -m 1G -smp 2 -no-reboot -nographic -nodefaults \
 		  -accel tcg -accel hvf -accel kvm \
 		  -serial file:"$serial" \
 		  -append "$cmdline" \
 		  -kernel "$kernel_path" \
-		  -initrd "$initrd"
+		  -initrd "$initrd" \
+		  "${TEST_QEMU_ARGS[@]}"
 
 	grep "TEST PASSED" "$serial" &> /dev/null || fail "Liveupdate failed"
+	test_check || fail "Host-side check failed"
 }
 
 function target_to_arch() {
@@ -248,8 +272,14 @@ function main() {
 
 	local arch=$(target_to_arch "$target")
 
+	if [ -f "$test_dir/$test_name.vmtest.sh" ]; then
+		source "$test_dir/$test_name.vmtest.sh"
+	else
+		TEST_SRCS=("$test_name.c")
+	fi
+
 	if [ -z "$build_dir" ]; then
-		build_dir="$kernel_dir/.luo_test_build.$arch"
+		build_dir="$kernel_dir/.luo_test_build.$arch${TEST_BUILD_NAME:+.$TEST_BUILD_NAME}"
 	fi
 
 	mkdir -p "$build_dir"
@@ -262,9 +292,11 @@ function main() {
 	build_kernel "$build_dir" "$make_cmd_build" "$KERNEL_IMAGE" "$target"
 
 	local final_kernel="$build_dir/arch/$arch/boot/$KERNEL_IMAGE"
-	mkinitrd "$build_dir" "$final_kernel" "$test_name"
+	local cmdline="$KERNEL_CMDLINE liveupdate=on panic=-1 $TEST_CMDLINE"
 
-	run_qemu "$QEMU_CMD" "$KERNEL_CMDLINE" "$final_kernel"
+	mkinitrd "$build_dir" "$final_kernel"
+
+	run_qemu "$QEMU_CMD" "$cmdline" "$final_kernel"
 	ktap_test_pass "$test_name succeeded"
 }
 
