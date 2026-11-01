@@ -22,6 +22,13 @@ TEST_NAMES=(
 	"luo_stress_sessions"
 )
 
+# Tests in subdirectories are described by <dir>/<name>.vmtest.sh
+for test_def in "$SCRIPT_DIR"/*/*.vmtest.sh; do
+	[ -f "$test_def" ] || continue
+	test_def=${test_def#"$SCRIPT_DIR/"}
+	TEST_NAMES+=("${test_def%.vmtest.sh}")
+done
+
 function usage() {
 	cat <<EOF
 $0 [-k] [-o output_dir] [-h]
@@ -70,7 +77,7 @@ function main() {
 
 	for arch in "${TARGETS[@]}"; do
 		for test_name in "${TEST_NAMES[@]}"; do
-			log="$output_dir/${arch}_${test_name}.log"
+			log="$output_dir/${arch}_${test_name//\//_}.log"
 
 			printf "  -> %-8s %-24s ... " "$arch" "$test_name"
 
