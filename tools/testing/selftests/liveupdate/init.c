@@ -19,6 +19,7 @@
 #define KERNEL_IMAGE "/kernel"
 #define INITRD_IMAGE "/initrd.img"
 #define TEST_BINARY "/test_binary"
+#define CMDLINE_STAGE2 "/cmdline_stage2"
 
 static int mount_filesystems(void)
 {
@@ -48,21 +49,22 @@ static long kexec_file_load(int kernel_fd, int initrd_fd,
 		       cmdline, flags);
 }
 
-static int kexec_load(void)
+/*
+ * Read the kexec'd kernel's command line from CMDLINE_STAGE2 if it exists, or
+ * reuse the current command line otherwise.
+ */
+static int read_cmdline_stage2(char *cmdline, size_t size)
 {
-	char cmdline[COMMAND_LINE_SIZE];
-	int kernel_fd, initrd_fd, err;
 	ssize_t len;
 	int fd;
 
-	fd = open("/proc/cmdline", O_RDONLY);
-	if (fd < 0) {
-		fprintf(stderr, "INIT: Failed to read /proc/cmdline\n");
-
+	fd = open(CMDLINE_STAGE2, O_RDONLY);
+	if (fd < 0)
+		fd = open("/proc/cmdline", O_RDONLY);
+	if (fd < 0)
 		return -1;
-	}
 
-	len = read(fd, cmdline, sizeof(cmdline) - 1);
+	len = read(fd, cmdline, size - 1);
 	close(fd);
 	if (len < 0)
 		return -1;
@@ -70,6 +72,19 @@ static int kexec_load(void)
 	cmdline[len] = 0;
 	if (len > 0 && cmdline[len - 1] == '\n')
 		cmdline[len - 1] = 0;
+
+	return 0;
+}
+
+static int kexec_load(void)
+{
+	char cmdline[COMMAND_LINE_SIZE];
+	int kernel_fd, initrd_fd, err;
+
+	if (read_cmdline_stage2(cmdline, sizeof(cmdline))) {
+		fprintf(stderr, "INIT: Failed to read the command line\n");
+		return -1;
+	}
 
 	strncat(cmdline, " luo_stage=2", sizeof(cmdline) - strlen(cmdline) - 1);
 

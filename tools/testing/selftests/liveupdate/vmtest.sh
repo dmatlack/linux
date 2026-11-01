@@ -26,6 +26,8 @@ MODULE_FILES=()
 #                        tests with different Kconfigs don't share a build
 #   TEST_QEMU_ARGS       Extra QEMU arguments
 #   TEST_CMDLINE         Extra command line for both kernels
+#   TEST_CMDLINE_STAGE1  Extra command line for the first kernel only
+#   TEST_CMDLINE_STAGE2  Extra command line for the kexec'd kernel only
 #   TEST_TIMEOUT         Timeout for the QEMU run
 #   test_check()         Host-side check, run after the test passes in the VM
 TEST_SRCS=()
@@ -34,6 +36,8 @@ TEST_MODULES=()
 TEST_BUILD_NAME=""
 TEST_QEMU_ARGS=()
 TEST_CMDLINE=""
+TEST_CMDLINE_STAGE1=""
+TEST_CMDLINE_STAGE2=""
 TEST_TIMEOUT="30s"
 
 function test_check() {
@@ -180,6 +184,7 @@ function build_modules() {
 function mkinitrd() {
 	local build_dir=$1
 	local kernel_path=$2
+	local cmdline_stage2=$3
 	local test_srcs=("${TEST_SRCS[@]/#/$test_dir/}")
 	local extra_files="$workspace_dir/cpio_list_extra"
 	local ko
@@ -229,6 +234,13 @@ file /test_binary $workspace_dir/test_binary 0755 0 0
 file /initrd.img $workspace_dir/inner_initrd.cpio 0644 0 0
 EOF
 	cat "$extra_files" >> "$workspace_dir/cpio_list"
+
+	# Only the first kernel needs the command line for the kexec'd kernel
+	if [ -n "$cmdline_stage2" ]; then
+		echo "$cmdline_stage2" > "$workspace_dir/cmdline_stage2"
+		echo "file /cmdline_stage2 $workspace_dir/cmdline_stage2 0644 0 0" \
+			>> "$workspace_dir/cpio_list"
+	fi
 
 	# Generate the final initrd
 	"$build_dir/usr/gen_init_cpio" "$workspace_dir/cpio_list" > "$initrd"
@@ -327,10 +339,16 @@ function main() {
 
 	local final_kernel="$build_dir/arch/$arch/boot/$KERNEL_IMAGE"
 	local cmdline="$KERNEL_CMDLINE liveupdate=on panic=-1 $TEST_CMDLINE"
+	local cmdline_stage2=""
 
-	mkinitrd "$build_dir" "$final_kernel"
+	# By default, the kexec'd kernel reuses the first kernel's command line
+	if [ -n "$TEST_CMDLINE_STAGE1$TEST_CMDLINE_STAGE2" ]; then
+		cmdline_stage2="$cmdline $TEST_CMDLINE_STAGE2"
+	fi
 
-	run_qemu "$QEMU_CMD" "$cmdline" "$final_kernel"
+	mkinitrd "$build_dir" "$final_kernel" "$cmdline_stage2"
+
+	run_qemu "$QEMU_CMD" "$cmdline $TEST_CMDLINE_STAGE1" "$final_kernel"
 	ktap_test_pass "$test_name succeeded"
 }
 
