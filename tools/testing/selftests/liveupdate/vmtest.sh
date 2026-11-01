@@ -12,6 +12,7 @@ workspace_dir=""
 headers_dir=""
 initrd=""
 KEEP_WORKSPACE=0
+MODULE_FILES=()
 
 # A test named "foo" is either built from foo.c, or described by foo.vmtest.sh.
 # A test definition is sourced after $arch, $target and $workspace_dir are set,
@@ -19,6 +20,8 @@ KEEP_WORKSPACE=0
 #
 #   TEST_SRCS            C sources of the test binary, relative to $test_dir
 #   TEST_KCONFIGS        Extra Kconfig fragments, relative to $test_dir
+#   TEST_MODULES         Kernel module directories, relative to $test_dir.
+#                        Each module is placed at /<module>.ko in the initrd.
 #   TEST_BUILD_NAME      Suffix of the default kernel build directory, so that
 #                        tests with different Kconfigs don't share a build
 #   TEST_QEMU_ARGS       Extra QEMU arguments
@@ -27,6 +30,7 @@ KEEP_WORKSPACE=0
 #   test_check()         Host-side check, run after the test passes in the VM
 TEST_SRCS=()
 TEST_KCONFIGS=()
+TEST_MODULES=()
 TEST_BUILD_NAME=""
 TEST_QEMU_ARGS=()
 TEST_CMDLINE=""
@@ -152,12 +156,33 @@ function build_kernel() {
 
 	$make_cmd "$kimage"
 	$make_cmd headers_install INSTALL_HDR_PATH="$headers_dir"
+
+	# External modules need Module.symvers
+	if [ ${#TEST_MODULES[@]} -gt 0 ]; then
+		$make_cmd modules
+	fi
+}
+
+function build_modules() {
+	local make_cmd=$1
+	local mod_dir out ko
+
+	for mod_dir in "${TEST_MODULES[@]}"; do
+		out="$workspace_dir/modules/$mod_dir"
+		mkdir -p "$out"
+		$make_cmd M="$test_dir/$mod_dir" MO="$out" modules
+		for ko in "$out"/*.ko; do
+			MODULE_FILES+=("$ko")
+		done
+	done
 }
 
 function mkinitrd() {
 	local build_dir=$1
 	local kernel_path=$2
 	local test_srcs=("${TEST_SRCS[@]/#/$test_dir/}")
+	local extra_files="$workspace_dir/cpio_list_extra"
+	local ko
 
 	# Compile the test binary and the init process
 	"$CROSS_COMPILE"gcc -static -O2 -nostdinc -nostdlib \
@@ -174,6 +199,12 @@ function mkinitrd() {
 			-I "$kernel_dir/tools/include/nolibc"		\
 			-o "$workspace_dir/init" "$test_dir/init.c"
 
+	# Files needed by both kernels
+	: > "$extra_files"
+	for ko in "${MODULE_FILES[@]}"; do
+		echo "file /$(basename "$ko") $ko 0644 0 0" >> "$extra_files"
+	done
+
 	cat > "$workspace_dir/cpio_list_inner" <<EOF
 dir /dev 0755 0 0
 dir /proc 0755 0 0
@@ -182,6 +213,7 @@ nod /dev/console 0600 0 0 c 5 1
 file /init $workspace_dir/init 0755 0 0
 file /test_binary $workspace_dir/test_binary 0755 0 0
 EOF
+	cat "$extra_files" >> "$workspace_dir/cpio_list_inner"
 
 	# Generate inner_initrd.cpio
 	"$build_dir/usr/gen_init_cpio" "$workspace_dir/cpio_list_inner" > "$workspace_dir/inner_initrd.cpio"
@@ -196,6 +228,7 @@ file /kernel $kernel_path 0644 0 0
 file /test_binary $workspace_dir/test_binary 0755 0 0
 file /initrd.img $workspace_dir/inner_initrd.cpio 0644 0 0
 EOF
+	cat "$extra_files" >> "$workspace_dir/cpio_list"
 
 	# Generate the final initrd
 	"$build_dir/usr/gen_init_cpio" "$workspace_dir/cpio_list" > "$initrd"
@@ -290,6 +323,7 @@ function main() {
 	local make_cmd_build="$make_cmd -C $kernel_dir O=$build_dir"
 
 	build_kernel "$build_dir" "$make_cmd_build" "$KERNEL_IMAGE" "$target"
+	build_modules "$make_cmd_build"
 
 	local final_kernel="$build_dir/arch/$arch/boot/$KERNEL_IMAGE"
 	local cmdline="$KERNEL_CMDLINE liveupdate=on panic=-1 $TEST_CMDLINE"
