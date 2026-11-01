@@ -46,10 +46,18 @@ EOF
 }
 
 function cleanup() {
+	local exit_code=$?
+
 	if [ "$KEEP_WORKSPACE" -eq 1 ]; then
 		echo "# Workspace preserved at: $workspace_dir"
 	else
 		rm -fr "$workspace_dir"
+	fi
+
+	# ktap_finished() exits with KSFT_PASS for skipped tests
+	if [ "$exit_code" -eq "$KSFT_SKIP" ]; then
+		ktap_print_totals
+		exit "$KSFT_SKIP"
 	fi
 
 	ktap_finished
