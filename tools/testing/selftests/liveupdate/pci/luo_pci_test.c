@@ -8,13 +8,17 @@
  *   lupci.preserve=<path>[,<path>...]  Endpoints to preserve.
  *   lupci.control=<path>[,<path>...]   Endpoints to bind to the test driver
  *                                      but not preserve.
+ *   lupci.marker=<bdf>                 Optional device whose config space is
+ *                                      written to mark the phases of the test
+ *                                      in a QEMU trace of config writes.
  *
  * A <path> identifies a device independently of bus numbers: a device on the
  * root bus followed by the device.function of each device below it, e.g.
  * 0000:00:02.0/00.0 is function 0 of device 0 below the bridge at 0000:00:02.0.
  *
  * Stage 1 snapshots the config space of each preserved endpoint and of all
- * bridges above it, and preserves the endpoints. Stage 2 checks the
+ * bridges above it, prints the snapshot so that a host-side checker can
+ * validate the QEMU trace, and preserves the endpoints. Stage 2 checks the
  * devices against the snapshot before and after the driver retrieves and
  * finishes them.
  *
@@ -46,6 +50,14 @@
 #define DATA_SESSION_NAME	"lupci_data"
 #define DATA_MEMFD_TOKEN	1
 #define DEVICE_SESSION_NAME	"lupci_devices"
+
+/* Values written to the marker device. Keep in sync with check_cfg_trace.py. */
+#define MARKER_OFFSET		0x40
+#define MARKER_STAGE1_DONE	0x4c550001
+#define MARKER_STAGE2_START	0x4c550002
+#define MARKER_STAGE2_DONE	0x4c550003
+
+#define MANIFEST_PREFIX		"LUPCI-MANIFEST: "
 
 #define CMDLINE_SIZE		4096
 #define CONFIG_SIZE		4096
@@ -85,6 +97,7 @@ static int nr_before;
 
 static char opt_preserve[CMDLINE_SIZE];
 static char opt_control[CMDLINE_SIZE];
+static char opt_marker[CMDLINE_SIZE];
 
 /* Length of the prefix of @s that contains none of @reject (nolibc lacks strcspn). */
 static size_t span_until(const char *s, const char *reject)
@@ -142,6 +155,7 @@ static void parse_cmdline(void)
 
 	get_cmdline_option(cmdline, "lupci.preserve", opt_preserve, sizeof(opt_preserve));
 	get_cmdline_option(cmdline, "lupci.control", opt_control, sizeof(opt_control));
+	get_cmdline_option(cmdline, "lupci.marker", opt_marker, sizeof(opt_marker));
 
 	if (!opt_preserve[0])
 		ksft_exit_skip("No devices to preserve (lupci.preserve=)\n");
@@ -165,6 +179,26 @@ static void load_module(void)
 	ret = syscall(__NR_finit_module, fd, "", 0);
 	if (ret < 0 && errno != EEXIST)
 		fail_exit("finit_module %s", LIVEUPDATE_PCI_TEST_MODULE);
+
+	close(fd);
+}
+
+static void write_marker(uint32_t value)
+{
+	char path[64];
+	int fd;
+
+	if (!opt_marker[0])
+		return;
+
+	snprintf(path, sizeof(path), "/sys/bus/pci/devices/%s/config", opt_marker);
+	fd = open(path, O_WRONLY);
+	if (fd < 0)
+		fail_exit("open %s", path);
+
+	if (lseek(fd, MARKER_OFFSET, SEEK_SET) != MARKER_OFFSET ||
+	    write(fd, &value, sizeof(value)) != sizeof(value))
+		fail_exit("write marker 0x%x to %s", value, path);
 
 	close(fd);
 }
@@ -597,6 +631,14 @@ static void run_stage_1(int luo_fd)
 			fail_exit("Snapshot is too large");
 	}
 
+	/* Print the snapshot for the host-side checker. */
+	for (i = 0; i < nr_devices; i++) {
+		char line[512];
+
+		format_snapshot(&devices[i], line, sizeof(line));
+		ksft_print_msg(MANIFEST_PREFIX "%s", line);
+	}
+
 	create_state_file(luo_fd, STATE_SESSION_NAME, STATE_MEMFD_TOKEN, 2);
 
 	session_fd = luo_create_session(luo_fd, DATA_SESSION_NAME);
@@ -627,6 +669,7 @@ static void run_stage_1(int luo_fd)
 	}
 
 	close(ctl_fd);
+	write_marker(MARKER_STAGE1_DONE);
 
 	close(luo_fd);
 	daemonize_and_wait();
@@ -722,6 +765,7 @@ static void run_stage_2(int luo_fd, int state_session_fd)
 	if (luo_session_finish(state_session_fd) < 0)
 		fail_exit("luo_session_finish %s", STATE_SESSION_NAME);
 
+	write_marker(MARKER_STAGE2_DONE);
 	ksft_print_msg("\n--- PCI LIVE UPDATE TEST PASSED ---\n");
 }
 
@@ -744,6 +788,9 @@ int main(int argc, char *argv[])
 
 	mount_sysfs();
 	parse_cmdline();
+
+	if (stage == 2)
+		write_marker(MARKER_STAGE2_START);
 
 	add_paths(opt_preserve, ROLE_PRESERVED);
 	add_paths(opt_control, ROLE_CONTROL);

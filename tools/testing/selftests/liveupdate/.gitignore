@@ -4,6 +4,7 @@
 !*.c
 !*.h
 !*.mk
+!*.py
 !*.sh
 !.gitignore
 !config
