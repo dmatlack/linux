@@ -10,7 +10,13 @@
 # "igb" device as the endpoint, and names the endpoints to preserve and the
 # control endpoints (bound to the test driver but not preserved) by their path
 # from the root bus. See luo_pci_test.c for the path format.
+#
+# QEMU traces every PCI config write, and check_cfg_trace.py checks that none
+# of them disrupts a preserved device between the end of stage 1 and the end
+# of stage 2.
 
+PCI_TRACE="$workspace_dir/qemu-pci-trace.log"
+PCI_MARKER_ADDR=1e
 PCI_CHASSIS=0
 
 TEST_SRCS=(pci/luo_pci_test.c)
@@ -22,11 +28,21 @@ TEST_MODULES=(modules)
 TEST_BUILD_NAME="pci"
 TEST_TIMEOUT="180s"
 
-TEST_QEMU_ARGS=()
+# The marker device lets the test binary mark the phases of the test in the
+# trace by writing to its config space.
+TEST_QEMU_ARGS=(
+	-device "pci-testdev,bus=pcie.0,addr=0x$PCI_MARKER_ADDR"
+	-trace "enable=pci_cfg_write,file=$PCI_TRACE"
+)
+TEST_CMDLINE="lupci.marker=0000:00:$PCI_MARKER_ADDR.0"
 
 # The default x86 machine (pc) does not support PCIe.
 if [[ "$arch" == "x86" ]]; then
 	TEST_QEMU_ARGS+=(-M q35)
+fi
+
+if ! command -v python3 &> /dev/null; then
+	skip "python3 is required to check the QEMU trace"
 fi
 
 # pci_root_port <id> <addr>
@@ -66,7 +82,8 @@ function pci_preserve() {
 
 # pci_control <path>[,<path>...]
 #   Bind the endpoints at <path> to the test driver, but don't preserve them.
-#   Bus Master must be cleared on them during kexec.
+#   The trace check expects Bus Master to be cleared on them during kexec, which
+#   shows that it is looking at the right devices and window.
 function pci_control() {
 	TEST_CMDLINE+=" lupci.control=$1"
 }
@@ -95,4 +112,9 @@ function pci_topology_switch() {
 
 	pci_preserve 0000:00:02.0/00.0/00.0/00.0
 	pci_control 0000:00:02.0/00.0/01.0/00.0
+}
+
+function test_check() {
+	python3 "$test_dir/pci/check_cfg_trace.py" \
+		--serial "$workspace_dir/qemu.serial" --trace "$PCI_TRACE"
 }
