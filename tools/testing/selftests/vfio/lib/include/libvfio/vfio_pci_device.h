@@ -15,6 +15,13 @@ struct vfio_pci_bar {
 	void *vaddr;
 };
 
+struct vfio_pci_mem_bar {
+	struct vfio_pci_bar *bar;
+	void *vaddr;
+	u64 offset;
+	u64 size;
+};
+
 struct vfio_pci_device {
 	const char *bdf;
 	int fd;
@@ -161,6 +168,9 @@ static inline bool vfio_pci_device_match(struct vfio_pci_device *device,
 	return (vendor_id == vfio_pci_config_readw(device, PCI_VENDOR_ID)) &&
 		(device_id == vfio_pci_config_readw(device, PCI_DEVICE_ID));
 }
+
+bool vfio_pci_find_mem_bar(struct vfio_pci_device *device, u64 min_size,
+			   struct vfio_pci_mem_bar *mem_bar);
 
 const char *vfio_pci_get_cdev_path(const char *bdf);
 
