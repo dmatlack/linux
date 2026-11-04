@@ -26,6 +26,9 @@ Live Update ABI
    :doc: PCI File-Lifecycle Bound (FLB) Live Update ABI
 
 .. kernel-doc:: include/linux/kho/abi/pci.h
+   :doc: PCI Saved State Live Update ABI
+
+.. kernel-doc:: include/linux/kho/abi/pci.h
    :internal:
 
 See Also

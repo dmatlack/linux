@@ -93,4 +93,36 @@ struct pci_ser {
 	u64 devices;
 } __packed;
 
+/**
+ * DOC: PCI Saved State Live Update ABI
+ *
+ * A driver that keeps a PCI device running across a Live Update can hand the
+ * state it captured with pci_store_saved_state() to the next kernel. The PCI
+ * core copies the state into memory preserved with KHO, laid out as struct
+ * pci_saved_state_ser, and returns the physical address of that memory, which
+ * the driver records in its own preserved state.
+ *
+ * Every saved value is identified only by the configuration space offset of
+ * the register it was read from. The layout therefore does not depend on which
+ * registers the kernel that saved them chose to save, and the next kernel can
+ * drop values for registers it does not restore.
+ */
+
+/* Number of DWORDs in a PCI Express configuration space (4 KiB). */
+#define PCI_SAVED_STATE_SER_DWORDS 1024
+
+/**
+ * struct pci_saved_state_ser - Serialized struct pci_saved_state
+ *
+ * @dword_map: One bit per DWORD of configuration space. Bit N, i.e. bit
+ *             (N % 64) of @dword_map[N / 64], is set if the DWORD at
+ *             configuration space offset N * 4 was saved.
+ * @dword_val: The saved DWORDs, one per bit set in @dword_map, in ascending
+ *             configuration space offset order.
+ */
+struct pci_saved_state_ser {
+	u64 dword_map[PCI_SAVED_STATE_SER_DWORDS / 64];
+	u32 dword_val[];
+} __packed;
+
 #endif /* _LINUX_KHO_ABI_PCI_H */

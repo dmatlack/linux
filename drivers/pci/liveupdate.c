@@ -1037,3 +1037,121 @@ void pci_liveupdate_unregister_flb(struct liveupdate_file_handler *fh)
 	liveupdate_unregister_flb(fh, &pci_liveupdate_flb);
 }
 EXPORT_SYMBOL_GPL(pci_liveupdate_unregister_flb);
+
+static_assert(PCI_SAVED_STATE_SER_DWORDS == PCI_CFG_SPACE_EXP_DWORDS);
+
+/**
+ * pci_liveupdate_preserve_saved_state() - Preserve a struct pci_saved_state
+ * @state: Saved state returned by pci_store_saved_state().
+ * @phys: Returns the physical address of the preserved state.
+ *
+ * Copy @state into memory preserved for the next kernel, laid out as struct
+ * pci_saved_state_ser. The caller records @phys in its own preserved state and
+ * passes it to pci_liveupdate_retrieve_saved_state() in the next kernel. If
+ * the device ends up not being preserved, the caller must unpreserve the state
+ * with pci_liveupdate_unpreserve_saved_state().
+ *
+ * Return: 0 on success, <0 on failure.
+ */
+int pci_liveupdate_preserve_saved_state(const struct pci_saved_state *state,
+					u64 *phys)
+{
+	struct pci_saved_state_ser *ser;
+	unsigned int nr_dwords;
+
+	if (!state)
+		return -EINVAL;
+
+	nr_dwords = bitmap_weight(state->dword_map, PCI_CFG_SPACE_EXP_DWORDS);
+
+	ser = kho_alloc_preserve(struct_size(ser, dword_val, nr_dwords));
+	if (IS_ERR(ser))
+		return PTR_ERR(ser);
+
+	bitmap_to_arr64(ser->dword_map, state->dword_map,
+			PCI_CFG_SPACE_EXP_DWORDS);
+	memcpy(ser->dword_val, state->dword_val, nr_dwords * sizeof(u32));
+
+	*phys = virt_to_phys(ser);
+	return 0;
+}
+EXPORT_SYMBOL_GPL(pci_liveupdate_preserve_saved_state);
+
+/**
+ * pci_liveupdate_unpreserve_saved_state() - Unpreserve a struct pci_saved_state
+ * @phys: Physical address returned by pci_liveupdate_preserve_saved_state().
+ *
+ * Unpreserve and free the state, e.g. because the device will not be
+ * preserved after all.
+ */
+void pci_liveupdate_unpreserve_saved_state(u64 phys)
+{
+	kho_unpreserve_free(phys_to_virt(phys));
+}
+EXPORT_SYMBOL_GPL(pci_liveupdate_unpreserve_saved_state);
+
+/*
+ * The configuration space header is always restored. Capability registers are
+ * only restored if this kernel reserved room for them.
+ */
+static bool pci_saved_state_dword_restorable(struct pci_dev *dev,
+					     unsigned int dword)
+{
+	return dword < PCI_STD_HEADER_DWORDS ||
+	       pci_saved_cap_reserved(dev, dword * sizeof(u32));
+}
+
+/**
+ * pci_liveupdate_retrieve_saved_state() - Retrieve a struct pci_saved_state
+ * @dev: The PCI device the state was saved from.
+ * @phys: Physical address that the previous kernel's
+ *        pci_liveupdate_preserve_saved_state() returned.
+ *
+ * Rebuild the struct pci_saved_state that the previous kernel preserved, for
+ * use with pci_load_saved_state(), and free the preserved memory. If this
+ * fails, the preserved memory is left in place so that the caller can try
+ * again.
+ *
+ * The saved configuration space header is always kept. Saved capability
+ * registers that this kernel does not restore for @dev are dropped.
+ *
+ * Return: The saved state, to be freed with kfree(), or an ERR_PTR() on
+ * failure.
+ */
+struct pci_saved_state *
+pci_liveupdate_retrieve_saved_state(struct pci_dev *dev, u64 phys)
+{
+	struct pci_saved_state_ser *ser = phys_to_virt(phys);
+	DECLARE_BITMAP(map, PCI_CFG_SPACE_EXP_DWORDS);
+	unsigned int dword, nr_dwords = 0, i = 0, j = 0;
+	struct pci_saved_state *state;
+
+	bitmap_from_arr64(map, ser->dword_map, PCI_CFG_SPACE_EXP_DWORDS);
+
+	for_each_set_bit(dword, map, PCI_CFG_SPACE_EXP_DWORDS) {
+		if (pci_saved_state_dword_restorable(dev, dword))
+			nr_dwords++;
+	}
+
+	state = kzalloc(struct_size(state, dword_val, nr_dwords), GFP_KERNEL);
+	if (!state)
+		return ERR_PTR(-ENOMEM);
+
+	for_each_set_bit(dword, map, PCI_CFG_SPACE_EXP_DWORDS) {
+		u32 val = ser->dword_val[i++];
+
+		if (!pci_saved_state_dword_restorable(dev, dword))
+			continue;
+
+		__set_bit(dword, state->dword_map);
+		state->dword_val[j++] = val;
+	}
+
+	if (i != j)
+		pci_info(dev, "Dropped %u saved DWORDs this kernel does not restore\n",
+			 i - j);
+
+	kho_restore_free(ser);
+	return state;
+}
+EXPORT_SYMBOL_GPL(pci_liveupdate_retrieve_saved_state);

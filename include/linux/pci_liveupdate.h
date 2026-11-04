@@ -32,6 +32,7 @@ struct pci_liveupdate {
 };
 
 struct pci_dev;
+struct pci_saved_state;
 
 #ifdef CONFIG_PCI_LIVEUPDATE
 int pci_liveupdate_register_flb(struct liveupdate_file_handler *fh);
@@ -40,6 +41,11 @@ int pci_liveupdate_preserve(struct pci_dev *dev);
 void pci_liveupdate_unpreserve(struct pci_dev *dev);
 void pci_liveupdate_finish(struct pci_dev *dev);
 bool pci_liveupdate_is_incoming(struct pci_dev *dev);
+int pci_liveupdate_preserve_saved_state(const struct pci_saved_state *state,
+					u64 *phys);
+void pci_liveupdate_unpreserve_saved_state(u64 phys);
+struct pci_saved_state *
+pci_liveupdate_retrieve_saved_state(struct pci_dev *dev, u64 phys);
 #else
 static inline int pci_liveupdate_register_flb(struct liveupdate_file_handler *fh)
 {
@@ -66,6 +72,23 @@ static inline void pci_liveupdate_finish(struct pci_dev *dev)
 static inline bool pci_liveupdate_is_incoming(struct pci_dev *dev)
 {
 	return false;
+}
+
+static inline int
+pci_liveupdate_preserve_saved_state(const struct pci_saved_state *state,
+				    u64 *phys)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline void pci_liveupdate_unpreserve_saved_state(u64 phys)
+{
+}
+
+static inline struct pci_saved_state *
+pci_liveupdate_retrieve_saved_state(struct pci_dev *dev, u64 phys)
+{
+	return ERR_PTR(-EOPNOTSUPP);
 }
 #endif
 
