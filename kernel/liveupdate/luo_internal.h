@@ -109,7 +109,7 @@ int luo_file_freeze(struct luo_file_set *file_set,
 void luo_file_unfreeze(struct luo_file_set *file_set,
 		       struct luo_file_set_ser *file_set_ser);
 int luo_retrieve_file(struct luo_file_set *file_set, u64 token,
-		      const void __user *arg, struct file **filep);
+		      const void __user *arg, struct file **filep, int *fdp);
 int luo_file_finish(struct luo_file_set *file_set);
 int luo_file_deserialize(struct luo_file_set *file_set,
 			 struct luo_file_set_ser *file_set_ser);

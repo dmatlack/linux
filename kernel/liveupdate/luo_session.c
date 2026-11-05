@@ -285,31 +285,42 @@ static int luo_session_retrieve_fd(struct luo_session *session,
 {
 	struct liveupdate_session_retrieve_fd *argp = ucmd->cmd;
 	struct file *file;
-	int err;
+	int fd, err;
 
-	argp->fd = get_unused_fd_flags(O_CLOEXEC);
-	if (argp->fd < 0)
-		return argp->fd;
+	fd = get_unused_fd_flags(O_CLOEXEC);
+	if (fd < 0)
+		return fd;
 
 	mutex_lock(&session->mutex);
 	err = luo_retrieve_file(&session->file_set, argp->token,
-				u64_to_user_ptr(argp->arg), &file);
+				u64_to_user_ptr(argp->arg), &file, &argp->fd);
 	mutex_unlock(&session->mutex);
 	if (err < 0)
 		goto err_put_fd;
 
+	/*
+	 * If the file handler restored the preserved state into a file that is
+	 * already open in this task, return its file descriptor.
+	 */
+	if (argp->fd >= 0) {
+		fput(file);
+		put_unused_fd(fd);
+		return luo_ucmd_respond(ucmd, sizeof(*argp));
+	}
+
+	argp->fd = fd;
 	err = luo_ucmd_respond(ucmd, sizeof(*argp));
 	if (err)
 		goto err_put_file;
 
-	fd_install(argp->fd, file);
+	fd_install(fd, file);
 
 	return 0;
 
 err_put_file:
 	fput(file);
 err_put_fd:
-	put_unused_fd(argp->fd);
+	put_unused_fd(fd);
 
 	return err;
 }

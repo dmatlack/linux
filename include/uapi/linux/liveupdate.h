@@ -161,7 +161,9 @@ struct liveupdate_session_preserve_fd {
  * struct liveupdate_session_retrieve_fd - ioctl(LIVEUPDATE_SESSION_RETRIEVE_FD)
  * @size:  Input; sizeof(struct liveupdate_session_retrieve_fd)
  * @fd:    Output; The new file descriptor representing the fully restored
- *         kernel resource.
+ *         kernel resource, or the file descriptor of the file it was restored
+ *         into, if @arg passed one (see the documentation of the file
+ *         handler).
  * @token: Input; An opaque, token that was used to preserve the resource.
  * @arg:   Input; User-space pointer to a file-handler-specific argument
  *         structure starting with a 32-bit size field, or 0 if unused.
