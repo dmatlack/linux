@@ -9,18 +9,29 @@
  * leaves the device alone so that the selftests can check how the PCI core
  * treats it.
  *
+ * Like VFIO, the driver captures each device's state with
+ * pci_store_saved_state() when it first probes the device, and preserves that
+ * state along with the device, so that the selftests can check that the PCI
+ * core hands it to the next kernel intact.
+ *
  * Copyright (c) 2026, Google LLC.
  * David Matlack <dmatlack@google.com>
  */
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/anon_inodes.h>
+#include <linux/bitmap.h>
+#include <linux/file.h>
 #include <linux/fs.h>
+#include <linux/io.h>
+#include <linux/kexec_handover.h>
+#include <linux/kho/abi/pci.h>
 #include <linux/liveupdate.h>
 #include <linux/miscdevice.h>
 #include <linux/module.h>
 #include <linux/pci.h>
 #include <linux/pci_liveupdate.h>
+#include <linux/slab.h>
 #include <linux/uaccess.h>
 
 #include "../pci/liveupdate_pci_test.h"
@@ -29,7 +40,24 @@
 
 struct lupt_device {
 	bool incoming_at_probe;
+	/* Protected by the device lock */
+	struct pci_saved_state *saved_state;
 };
+
+/*
+ * Preserved for each device, at the physical address in the file's
+ * serialized_data.
+ */
+struct lupt_ser {
+	u32 domain;
+	u16 bdf;
+	u16 reserved;
+	u64 saved_state;	/* From pci_liveupdate_preserve_saved_state() */
+} __packed;
+
+static_assert(LIVEUPDATE_PCI_TEST_CFG_DWORDS == PCI_SAVED_STATE_SER_DWORDS);
+static_assert(LIVEUPDATE_PCI_TEST_UNRESERVED_DWORD ==
+	      PCI_SAVED_STATE_SER_DWORDS - 1);
 
 static struct pci_driver lupt_driver;
 
@@ -50,12 +78,95 @@ static struct pci_dev *lupt_get_bound_device(u32 domain, u16 bdf)
 	return pdev;
 }
 
+/* Returns the driver data of @pdev with its device lock held, or NULL. */
+static struct lupt_device *lupt_lock_device(struct pci_dev *pdev)
+{
+	device_lock(&pdev->dev);
+	if (pdev->driver == &lupt_driver)
+		return pci_get_drvdata(pdev);
+
+	device_unlock(&pdev->dev);
+	return NULL;
+}
+
+static void lupt_unlock_device(struct pci_dev *pdev)
+{
+	device_unlock(&pdev->dev);
+}
+
+static long lupt_get_saved_state(struct pci_dev *pdev, void __user *arg)
+{
+	struct liveupdate_pci_test_saved_state *out;
+	struct pci_saved_state_ser *ser;
+	struct lupt_device *ldev;
+	unsigned int i, nr = 0;
+	long ret = -ENOENT;
+	u64 phys;
+
+	out = kzalloc_obj(*out);
+	if (!out)
+		return -ENOMEM;
+
+	/*
+	 * struct pci_saved_state is opaque, so read it back through the form in
+	 * which it is preserved across Live Update.
+	 */
+	ldev = lupt_lock_device(pdev);
+	if (!ldev) {
+		ret = -ENODEV;
+		goto out;
+	}
+	if (ldev->saved_state)
+		ret = pci_liveupdate_preserve_saved_state(ldev->saved_state, &phys);
+	lupt_unlock_device(pdev);
+	if (ret)
+		goto out;
+
+	ser = phys_to_virt(phys);
+	for (i = 0; i < ARRAY_SIZE(ser->dword_map); i++) {
+		out->dword_map[i] = ser->dword_map[i];
+		nr += hweight64(ser->dword_map[i]);
+	}
+	memcpy(out->dword_val, ser->dword_val, nr * sizeof(u32));
+	pci_liveupdate_unpreserve_saved_state(phys);
+
+	ret = copy_to_user(arg, out, sizeof(*out)) ? -EFAULT : 0;
+out:
+	kfree(out);
+	return ret;
+}
+
+static long lupt_restore_saved_state(struct pci_dev *pdev)
+{
+	struct lupt_device *ldev;
+	long ret = -ENOENT;
+
+	ldev = lupt_lock_device(pdev);
+	if (!ldev)
+		return -ENODEV;
+
+	if (ldev->saved_state) {
+		ret = pci_load_saved_state(pdev, ldev->saved_state);
+		if (!ret)
+			pci_restore_state(pdev);
+	}
+
+	lupt_unlock_device(pdev);
+	return ret;
+}
+
 static long lupt_device_ioctl(struct file *file, unsigned int cmd,
 			      unsigned long arg)
 {
 	struct liveupdate_pci_test_device dev = {};
 	struct pci_dev *pdev = file->private_data;
 	struct lupt_device *ldev;
+
+	if (cmd == LIVEUPDATE_PCI_TEST_GET_SAVED_STATE)
+		return lupt_get_saved_state(pdev, (void __user *)arg);
+
+	if (cmd == LIVEUPDATE_PCI_TEST_RESTORE_SAVED_STATE)
+		return lupt_restore_saved_state(pdev);
 
 	if (cmd != LIVEUPDATE_PCI_TEST_GET_STATUS)
 		return -ENOTTY;
@@ -135,33 +246,109 @@ static bool lupt_can_preserve(struct liveupdate_file_handler *handler,
 	return file->f_op == &lupt_device_fops;
 }
 
-static int lupt_preserve(struct liveupdate_file_op_args *args)
+/*
+ * Add LIVEUPDATE_PCI_TEST_UNRESERVED_DWORD to the preserved saved state at
+ * *@phys, to stand in for a register that the previous kernel saved but the
+ * next kernel does not restore. It is the last DWORD of configuration space,
+ * so its value goes after all the others.
+ */
+static int lupt_add_unreserved_dword(u64 *phys)
 {
-	struct pci_dev *pdev = args->file->private_data;
-	int ret;
+	struct pci_saved_state_ser *old = phys_to_virt(*phys), *new;
+	DECLARE_BITMAP(map, PCI_SAVED_STATE_SER_DWORDS);
+	unsigned int nr;
 
-	ret = pci_liveupdate_preserve(pdev);
+	bitmap_from_arr64(map, old->dword_map, PCI_SAVED_STATE_SER_DWORDS);
+	if (test_bit(LIVEUPDATE_PCI_TEST_UNRESERVED_DWORD, map))
+		return -EEXIST;
+
+	nr = bitmap_weight(map, PCI_SAVED_STATE_SER_DWORDS);
+	new = kho_alloc_preserve(struct_size(new, dword_val, nr + 1));
+	if (IS_ERR(new))
+		return PTR_ERR(new);
+
+	__set_bit(LIVEUPDATE_PCI_TEST_UNRESERVED_DWORD, map);
+	bitmap_to_arr64(new->dword_map, map, PCI_SAVED_STATE_SER_DWORDS);
+	memcpy(new->dword_val, old->dword_val, nr * sizeof(u32));
+	new->dword_val[nr] = LIVEUPDATE_PCI_TEST_UNRESERVED_VALUE;
+
+	pci_liveupdate_unpreserve_saved_state(*phys);
+	*phys = virt_to_phys(new);
+	return 0;
+}
+
+static int lupt_preserve_saved_state(struct pci_dev *pdev, u64 *phys)
+{
+	struct lupt_device *ldev;
+	int ret = -ENOENT;
+
+	ldev = lupt_lock_device(pdev);
+	if (!ldev)
+		return -ENODEV;
+
+	if (ldev->saved_state)
+		ret = pci_liveupdate_preserve_saved_state(ldev->saved_state, phys);
+	lupt_unlock_device(pdev);
 	if (ret)
 		return ret;
 
-	args->serialized_data = (u64)pci_domain_nr(pdev->bus) << 16 | pci_dev_id(pdev);
+	ret = lupt_add_unreserved_dword(phys);
+	if (ret)
+		pci_liveupdate_unpreserve_saved_state(*phys);
+
+	return ret;
+}
+
+static int lupt_preserve(struct liveupdate_file_op_args *args)
+{
+	struct pci_dev *pdev = args->file->private_data;
+	struct lupt_ser *ser;
+	int ret;
+
+	ser = kho_alloc_preserve(sizeof(*ser));
+	if (IS_ERR(ser))
+		return PTR_ERR(ser);
+
+	ser->domain = pci_domain_nr(pdev->bus);
+	ser->bdf = pci_dev_id(pdev);
+
+	ret = lupt_preserve_saved_state(pdev, &ser->saved_state);
+	if (ret)
+		goto err_free_ser;
+
+	ret = pci_liveupdate_preserve(pdev);
+	if (ret)
+		goto err_free_saved_state;
+
+	args->serialized_data = virt_to_phys(ser);
 	return 0;
+
+err_free_saved_state:
+	pci_liveupdate_unpreserve_saved_state(ser->saved_state);
+err_free_ser:
+	kho_unpreserve_free(ser);
+	return ret;
 }
 
 static void lupt_unpreserve(struct liveupdate_file_op_args *args)
 {
+	struct lupt_ser *ser = phys_to_virt(args->serialized_data);
+
 	pci_liveupdate_unpreserve(args->file->private_data);
+	pci_liveupdate_unpreserve_saved_state(ser->saved_state);
+	kho_unpreserve_free(ser);
 }
 
 static int lupt_retrieve(struct liveupdate_file_op_args *args)
 {
-	u32 domain = args->serialized_data >> 16;
-	u16 bdf = args->serialized_data & 0xffff;
+	struct lupt_ser *ser = phys_to_virt(args->serialized_data);
+	struct pci_saved_state *saved_state;
+	struct lupt_device *ldev;
 	struct pci_dev *pdev;
 	struct file *file;
 
 	/* Userspace must load this driver before retrieving the device. */
-	pdev = lupt_get_bound_device(domain, bdf);
+	pdev = lupt_get_bound_device(ser->domain, ser->bdf);
 	if (!pdev)
 		return -ENODEV;
 
@@ -170,6 +357,21 @@ static int lupt_retrieve(struct liveupdate_file_op_args *args)
 		pci_dev_put(pdev);
 		return PTR_ERR(file);
 	}
+
+	saved_state = pci_liveupdate_retrieve_saved_state(pdev, ser->saved_state);
+	if (IS_ERR(saved_state)) {
+		fput(file);
+		return PTR_ERR(saved_state);
+	}
+
+	kho_restore_free(ser);
+
+	ldev = lupt_lock_device(pdev);
+	if (ldev) {
+		swap(ldev->saved_state, saved_state);
+		lupt_unlock_device(pdev);
+	}
+	kfree(saved_state);
 
 	args->file = file;
 	return 0;
@@ -216,11 +418,31 @@ static int lupt_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 		return ret;
 
 	pci_set_master(pdev);
+
+	/*
+	 * Capture the state the device was probed in, as VFIO does when a
+	 * device is first opened. A preserved device gets the state its
+	 * previous kernel captured when the device is retrieved instead.
+	 */
+	if (!ldev->incoming_at_probe) {
+		pci_save_state(pdev);
+		ldev->saved_state = pci_store_saved_state(pdev);
+		if (!ldev->saved_state)
+			return -ENOMEM;
+	}
+
 	pci_set_drvdata(pdev, ldev);
 
 	pci_info(pdev, "Bound to %s device\n",
 		 ldev->incoming_at_probe ? "incoming-preserved" : "non-preserved");
 	return 0;
+}
+
+static void lupt_remove(struct pci_dev *pdev)
+{
+	struct lupt_device *ldev = pci_get_drvdata(pdev);
+
+	kfree(ldev->saved_state);
 }
 
 static const struct pci_device_id lupt_ids[] = {
@@ -232,6 +454,7 @@ static struct pci_driver lupt_driver = {
 	.name = "liveupdate_pci_test",
 	.id_table = lupt_ids,
 	.probe = lupt_probe,
+	.remove = lupt_remove,
 };
 
 static int __init lupt_init(void)

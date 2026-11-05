@@ -28,6 +28,11 @@
  * devices against the snapshot before and after the driver retrieves and
  * finishes them.
  *
+ * The test driver also preserves the state it captured for each endpoint with
+ * pci_store_saved_state(). Stage 1 records that state and changes a saved
+ * register on the device. Stage 2 checks that the driver got the same state
+ * back, and that restoring it puts the register back.
+ *
  * Copyright (c) 2026, Google LLC.
  * David Matlack <dmatlack@google.com>
  */
@@ -56,6 +61,26 @@
 #define DATA_SESSION_NAME	"lupci_data"
 #define DATA_MEMFD_TOKEN	1
 #define DEVICE_SESSION_NAME	"lupci_devices"
+#define UNPRESERVE_SESSION_NAME	"lupci_unpreserve"
+
+/* Token of the memfd holding the saved state of devices[i] is this plus i. */
+#define SAVED_STATE_MEMFD_TOKEN	16
+
+/*
+ * Bits in the PCIe capability control registers, which the PCI core saves for
+ * every PCIe device, that stage 1 can flip on the device. It uses the first
+ * one that the device implements.
+ */
+static const struct {
+	uint16_t reg;
+	uint16_t bit;
+} saved_bits[] = {
+	{ PCI_EXP_DEVCTL, PCI_EXP_DEVCTL_CERE },
+	{ PCI_EXP_DEVCTL2, PCI_EXP_DEVCTL2_COMP_TMOUT_DIS },
+	{ PCI_EXP_LNKCTL, PCI_EXP_LNKCTL_CCC },
+	{ PCI_EXP_LNKCTL, PCI_EXP_LNKCTL_ES },
+	{ PCI_EXP_DEVCTL2, 0x8000 },	/* End-End TLP Prefix Blocking */
+};
 
 /* Values written to the marker device. Keep in sync with check_cfg_trace.py. */
 #define MARKER_OFFSET		0x40
@@ -100,6 +125,13 @@ static int nr_devices;
 /* Stage 2 snapshot, taken before the test driver is loaded. */
 static struct pci_snapshot before[MAX_DEVICES];
 static int nr_before;
+
+/* Stage 1 saved state of each preserved endpoint, retrieved in stage 2. */
+static struct liveupdate_pci_test_saved_state saved_states[MAX_DEVICES];
+
+/* The register stage 1 changed in each preserved endpoint, and the bit. */
+static uint16_t changed_pos[MAX_DEVICES];
+static uint16_t changed_bit[MAX_DEVICES];
 
 static char opt_preserve[CMDLINE_SIZE];
 static char opt_control[CMDLINE_SIZE];
@@ -244,6 +276,23 @@ static uint16_t cfg16(const uint8_t *cfg, int pos)
 static uint32_t cfg32(const uint8_t *cfg, int pos)
 {
 	return cfg16(cfg, pos) | (uint32_t)cfg16(cfg, pos + 2) << 16;
+}
+
+static void write_config16(const char *bdf, int pos, uint16_t value)
+{
+	char path[64];
+	int fd;
+
+	snprintf(path, sizeof(path), "/sys/bus/pci/devices/%s/config", bdf);
+	fd = open(path, O_WRONLY);
+	if (fd < 0)
+		fail_exit("open %s", path);
+
+	if (lseek(fd, pos, SEEK_SET) != pos ||
+	    write(fd, &value, sizeof(value)) != sizeof(value))
+		fail_exit("write 0x%x to %s at 0x%x", value, path, pos);
+
+	close(fd);
 }
 
 static uint16_t find_cap(const uint8_t *cfg, uint8_t id)
@@ -544,6 +593,114 @@ static uint16_t get_status(int fd, const char *bdf)
 	return dev.flags;
 }
 
+static void get_saved_state(int fd, const char *bdf,
+			    struct liveupdate_pci_test_saved_state *state)
+{
+	memset(state, 0, sizeof(*state));
+	if (ioctl(fd, LIVEUPDATE_PCI_TEST_GET_SAVED_STATE, state) < 0)
+		fail_exit("LIVEUPDATE_PCI_TEST_GET_SAVED_STATE for %s", bdf);
+}
+
+static bool dword_saved(const struct liveupdate_pci_test_saved_state *state,
+			int dword)
+{
+	return state->dword_map[dword / 64] & (1ULL << (dword % 64));
+}
+
+/* Get the saved value of the DWORD at @pos. Returns false if it wasn't saved. */
+static bool saved_value(const struct liveupdate_pci_test_saved_state *state,
+			int pos, uint32_t *value)
+{
+	int i, n = 0;
+
+	if (!dword_saved(state, pos / 4))
+		return false;
+
+	for (i = 0; i < pos / 4; i++)
+		n += dword_saved(state, i);
+
+	*value = state->dword_val[n];
+	return true;
+}
+
+/*
+ * Format the register stage 1 changed as "r=<offset>,<bit>", followed by @state
+ * as one "<dword>=<value>" line per saved DWORD, all in hex.
+ */
+static void format_saved_state(const struct liveupdate_pci_test_saved_state *state,
+			       int pos, int bit, char *buf, size_t size)
+{
+	size_t len;
+	int i, n = 0;
+
+	len = snprintf(buf, size, "r=%x,%x\n", pos, bit);
+	for (i = 0; i < LIVEUPDATE_PCI_TEST_CFG_DWORDS; i++) {
+		if (!dword_saved(state, i))
+			continue;
+
+		len += snprintf(buf + len, size - len, "%x=%x\n", i,
+				state->dword_val[n++]);
+		if (len >= size)
+			fail_exit("Saved state is too large");
+	}
+}
+
+static void parse_saved_state(const char *text,
+			      struct liveupdate_pci_test_saved_state *state,
+			      uint16_t *pos, uint16_t *bit)
+{
+	const char *p = text;
+	unsigned long dword;
+	char *end;
+	int n = 0;
+
+	if (strncmp(p, "r=", 2))
+		fail_exit("Malformed saved state: %s", p);
+	*pos = strtoul(p + 2, &end, 16);
+	if (*end != ',')
+		fail_exit("Malformed saved state: %s", p);
+	*bit = strtoul(end + 1, &end, 16);
+	p = end;
+	if (*p == '\n')
+		p++;
+
+	memset(state, 0, sizeof(*state));
+	while (*p) {
+		dword = strtoul(p, &end, 16);
+		if (*end != '=' || dword >= LIVEUPDATE_PCI_TEST_CFG_DWORDS)
+			fail_exit("Malformed saved state: %s", p);
+
+		state->dword_map[dword / 64] |= 1ULL << (dword % 64);
+		state->dword_val[n++] = strtoul(end + 1, &end, 16);
+		p = end;
+		if (*p == '\n')
+			p++;
+	}
+}
+
+static uint16_t read_config16(const char *bdf, int pos)
+{
+	uint8_t cfg[CONFIG_SIZE];
+
+	if (read_config(bdf, cfg) < PCI_CFG_SPACE_SIZE)
+		fail_exit("Failed to read config space of %s", bdf);
+
+	return cfg16(cfg, pos);
+}
+
+/* Get the saved value of the 16-bit register at @pos. */
+static bool saved_value16(const struct liveupdate_pci_test_saved_state *state,
+			  int pos, uint16_t *value)
+{
+	uint32_t dword;
+
+	if (!saved_value(state, pos & ~3, &dword))
+		return false;
+
+	*value = dword >> (8 * (pos & 3));
+	return true;
+}
+
 static int nr_failures;
 
 /* Whether @reg is listed in lupci.control_changes. */
@@ -645,6 +802,86 @@ static void check_devices(const char *when, const struct pci_snapshot *taken)
 		ksft_exit_fail_msg("%d check(s) failed %s\n", nr_failures, when);
 }
 
+/*
+ * Record the saved state of a preserved endpoint in a memfd for stage 2, and
+ * change one of its saved registers on the device so that stage 2 can tell
+ * whether restoring the saved state wrote it back.
+ */
+static void preserve_saved_state(int session_fd, int ctl_fd, int i)
+{
+	struct liveupdate_pci_test_saved_state state;
+	struct pci_snapshot *dev = &devices[i];
+	uint16_t saved, value, bit = 0;
+	char text[4096];
+	int fd, pos = 0;
+	size_t j;
+
+	fd = get_device_fd(ctl_fd, dev->bdf);
+	get_saved_state(fd, dev->bdf, &state);
+	close(fd);
+
+	if (dword_saved(&state, LIVEUPDATE_PCI_TEST_UNRESERVED_DWORD))
+		fail_exit("%s: DWORD 0x%x is saved", dev->bdf,
+			  LIVEUPDATE_PCI_TEST_UNRESERVED_DWORD);
+
+	if (!dev->pcie)
+		fail_exit("%s: Not a PCIe device", dev->bdf);
+
+	for (j = 0; j < ARRAY_SIZE(saved_bits); j++) {
+		pos = dev->pcie + saved_bits[j].reg;
+		bit = saved_bits[j].bit;
+
+		if (!saved_value16(&state, pos, &saved))
+			fail_exit("%s: Register 0x%x is not saved", dev->bdf, pos);
+		if (saved != read_config16(dev->bdf, pos))
+			fail_exit("%s: Saved 0x%x at 0x%x, device has 0x%x",
+				  dev->bdf, saved, pos, read_config16(dev->bdf, pos));
+
+		write_config16(dev->bdf, pos, saved ^ bit);
+		value = read_config16(dev->bdf, pos);
+		if (value == (saved ^ bit))
+			break;
+		write_config16(dev->bdf, pos, saved);
+		bit = 0;
+	}
+	if (!bit)
+		fail_exit("%s: None of the saved bits can be changed", dev->bdf);
+
+	ksft_print_msg("[STAGE 1] %s: Changed 0x%x from 0x%x to 0x%x\n", dev->bdf,
+		       pos, saved, value);
+
+	format_saved_state(&state, pos, bit, text, sizeof(text));
+	if (create_and_preserve_memfd(session_fd, SAVED_STATE_MEMFD_TOKEN + i, text) < 0)
+		fail_exit("Failed to preserve the saved state of %s", dev->bdf);
+}
+
+/*
+ * Preserve each endpoint in a session that is closed again right away, so
+ * that the test driver frees the saved state it preserved.
+ */
+static void preserve_and_unpreserve(int luo_fd, int ctl_fd)
+{
+	int session_fd, fd, i;
+
+	session_fd = luo_create_session(luo_fd, UNPRESERVE_SESSION_NAME);
+	if (session_fd < 0)
+		fail_exit("luo_create_session %s", UNPRESERVE_SESSION_NAME);
+
+	for (i = 0; i < nr_devices; i++) {
+		struct pci_snapshot *dev = &devices[i];
+
+		if (dev->role != ROLE_PRESERVED || !dev->endpoint)
+			continue;
+
+		fd = get_device_fd(ctl_fd, dev->bdf);
+		if (luo_session_preserve_fd(session_fd, fd, dev->token) < 0)
+			fail_exit("Failed to preserve %s", dev->bdf);
+		close(fd);
+	}
+
+	close(session_fd);
+}
+
 static void run_stage_1(int luo_fd)
 {
 	char text[4096] = {};
@@ -676,19 +913,26 @@ static void run_stage_1(int luo_fd)
 
 	create_state_file(luo_fd, STATE_SESSION_NAME, STATE_MEMFD_TOKEN, 2);
 
+	ctl_fd = open(LIVEUPDATE_PCI_TEST_DEVICE, O_RDWR);
+	if (ctl_fd < 0)
+		fail_exit("open %s", LIVEUPDATE_PCI_TEST_DEVICE);
+
+	preserve_and_unpreserve(luo_fd, ctl_fd);
+
 	session_fd = luo_create_session(luo_fd, DATA_SESSION_NAME);
 	if (session_fd < 0)
 		fail_exit("luo_create_session %s", DATA_SESSION_NAME);
 	if (create_and_preserve_memfd(session_fd, DATA_MEMFD_TOKEN, text) < 0)
 		fail_exit("Failed to preserve snapshot");
 
+	for (i = 0; i < nr_devices; i++) {
+		if (devices[i].role == ROLE_PRESERVED && devices[i].endpoint)
+			preserve_saved_state(session_fd, ctl_fd, i);
+	}
+
 	session_fd = luo_create_session(luo_fd, DEVICE_SESSION_NAME);
 	if (session_fd < 0)
 		fail_exit("luo_create_session %s", DEVICE_SESSION_NAME);
-
-	ctl_fd = open(LIVEUPDATE_PCI_TEST_DEVICE, O_RDWR);
-	if (ctl_fd < 0)
-		fail_exit("open %s", LIVEUPDATE_PCI_TEST_DEVICE);
 
 	for (i = 0; i < nr_devices; i++) {
 		struct pci_snapshot *dev = &devices[i];
@@ -708,6 +952,61 @@ static void run_stage_1(int luo_fd)
 
 	close(luo_fd);
 	daemonize_and_wait();
+}
+
+/*
+ * Check that the test driver got back the saved state it preserved for
+ * devices[i], without the DWORD it added that this kernel doesn't reserve, and
+ * that restoring it writes back the register that stage 1 changed.
+ */
+static void check_saved_state(int fd, int i)
+{
+	const struct liveupdate_pci_test_saved_state *expected = &saved_states[i];
+	struct liveupdate_pci_test_saved_state state;
+	struct pci_snapshot *dev = &devices[i];
+	int dword, n = 0, pos = changed_pos[i];
+	uint16_t bit = changed_bit[i], saved;
+	uint32_t value;
+
+	ksft_print_msg("[STAGE 2] Checking the saved state of %s\n", dev->bdf);
+
+	get_saved_state(fd, dev->bdf, &state);
+
+	check(!dword_saved(&state, LIVEUPDATE_PCI_TEST_UNRESERVED_DWORD),
+	      "%s: Unreserved DWORD 0x%x was not dropped", dev->bdf,
+	      LIVEUPDATE_PCI_TEST_UNRESERVED_DWORD);
+
+	for (dword = 0; dword < LIVEUPDATE_PCI_TEST_CFG_DWORDS; dword++) {
+		bool was_saved = dword_saved(expected, dword);
+		bool is_saved = dword_saved(&state, dword);
+
+		check(was_saved == is_saved, "%s: DWORD 0x%x %s saved", dev->bdf,
+		      dword, is_saved ? "is now" : "is no longer");
+		if (!was_saved || !is_saved)
+			continue;
+
+		saved_value(&state, dword * 4, &value);
+		check(value == expected->dword_val[n],
+		      "%s: Saved DWORD 0x%x changed from 0x%x to 0x%x", dev->bdf,
+		      dword, expected->dword_val[n], value);
+		n++;
+	}
+
+	if (!saved_value16(expected, pos, &saved))
+		fail_exit("%s: Register 0x%x is not saved", dev->bdf, pos);
+
+	value = read_config16(dev->bdf, pos);
+	check(value == (saved ^ bit),
+	      "%s: Register 0x%x is 0x%x before restoring, expected 0x%x",
+	      dev->bdf, pos, value, saved ^ bit);
+
+	check(!ioctl(fd, LIVEUPDATE_PCI_TEST_RESTORE_SAVED_STATE, 0),
+	      "%s: Restoring the saved state failed (errno %d)", dev->bdf, errno);
+
+	value = read_config16(dev->bdf, pos);
+	check(value == saved,
+	      "%s: Register 0x%x is 0x%x after restoring, expected 0x%x",
+	      dev->bdf, pos, value, saved);
 }
 
 static void run_stage_2(int luo_fd, int state_session_fd)
@@ -735,6 +1034,25 @@ static void run_stage_2(int luo_fd, int state_session_fd)
 	close(mfd);
 
 	parse_snapshots(text);
+
+	for (i = 0; i < nr_devices; i++) {
+		struct pci_snapshot *dev = &devices[i];
+
+		if (dev->role != ROLE_PRESERVED || !dev->endpoint)
+			continue;
+
+		mfd = restore_and_verify_memfd(session_fd, SAVED_STATE_MEMFD_TOKEN + i, NULL);
+		if (mfd < 0)
+			fail_exit("Failed to restore the saved state of %s", dev->bdf);
+		memset(text, 0, sizeof(text));
+		if (read(mfd, text, sizeof(text) - 1) < 0)
+			fail_exit("Failed to read the saved state of %s", dev->bdf);
+		close(mfd);
+
+		parse_saved_state(text, &saved_states[i], &changed_pos[i],
+				  &changed_bit[i]);
+	}
+
 	if (luo_session_finish(session_fd) < 0)
 		fail_exit("luo_session_finish %s", DATA_SESSION_NAME);
 	close(session_fd);
@@ -779,6 +1097,15 @@ static void run_stage_2(int luo_fd, int state_session_fd)
 	}
 
 	check_devices("after probe", NULL);
+
+	for (i = 0; i < nr_devices; i++) {
+		if (devices[i].role == ROLE_PRESERVED && devices[i].endpoint)
+			check_saved_state(fds[i], i);
+	}
+	if (nr_failures)
+		ksft_exit_fail_msg("%d check(s) failed\n", nr_failures);
+
+	check_devices("after restoring saved state", NULL);
 
 	ksft_print_msg("[STAGE 2] Finishing %s...\n", DEVICE_SESSION_NAME);
 	if (luo_session_finish(session_fd) < 0)
