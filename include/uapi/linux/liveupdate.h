@@ -250,4 +250,41 @@ struct liveupdate_session_get_name {
 #define LIVEUPDATE_SESSION_GET_NAME					\
 	_IO(LIVEUPDATE_IOCTL_TYPE, LIVEUPDATE_CMD_SESSION_GET_NAME)
 
+/**
+ * struct liveupdate_shmem_retrieve_arg - Argument to retrieve a tmpfs file
+ * @size: Input; sizeof(struct liveupdate_shmem_retrieve_arg)
+ * @fd:   Input; The file to restore the preserved file into.
+ *
+ * Passed via &struct liveupdate_session_retrieve_fd.arg to retrieve a file that
+ * was preserved from a tmpfs mount. Such files can only be retrieved with this
+ * argument, and memfds can only be retrieved without it. Otherwise, the
+ * retrieve fails with -EINVAL.
+ *
+ * The kernel restores the contents and size of the preserved file into @fd,
+ * which must be an empty regular file on a tmpfs mount, opened for writing,
+ * and returns @fd in &struct liveupdate_session_retrieve_fd.fd, instead of a
+ * new file descriptor. Everything else about the file, e.g. its path, owner,
+ * mode and file status flags, is up to userspace, which creates the file. To
+ * keep anyone from accessing the file before it is complete, userspace can
+ * create it with O_TMPFILE and link it with linkat() after the retrieve. The
+ * blocks of the file are charged to the mount of @fd.
+ *
+ * LUO keeps a reference to the file until the session is finished. Since the
+ * file is open for writing, it can't be executed until then (execve() fails
+ * with -ETXTBSY).
+ *
+ * If @fd is not a file descriptor opened for writing, the retrieve fails with
+ * -EBADF. If it isn't an empty regular file on a tmpfs mount, the retrieve
+ * fails with -EINVAL, and if it is immutable, with -EPERM. If LUO already
+ * manages @fd, e.g. because it is preserved in an outgoing session, the
+ * retrieve fails with -EBUSY. These errors can be retried with another file.
+ * Errors while restoring the contents, e.g. -ENOMEM, or -ENOSPC if the
+ * contents don't fit on the mount, are permanent, and retrieving the token
+ * again returns the same error. @fd is left empty in that case.
+ */
+struct liveupdate_shmem_retrieve_arg {
+	__u32	size;
+	__s32	fd;
+};
+
 #endif /* _UAPI_LIVEUPDATE_H */

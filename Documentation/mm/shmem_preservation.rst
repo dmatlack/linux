@@ -1,14 +1,14 @@
 .. SPDX-License-Identifier: GPL-2.0-or-later
 
-==========================
-Memfd Preservation via LUO
-==========================
+====================================
+Memfd and Tmpfs Preservation via LUO
+====================================
 
 .. kernel-doc:: mm/shmem_luo.c
-   :doc: Memfd Preservation via LUO
+   :doc: Memfd and Tmpfs Preservation via LUO
 
-Memfd Preservation ABI
-======================
+Memfd and Tmpfs Preservation ABI
+================================
 
 .. kernel-doc:: include/linux/kho/abi/shmem.h
    :doc: shmem Live Update ABI

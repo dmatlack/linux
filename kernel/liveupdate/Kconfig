@@ -76,9 +76,9 @@ config LIVEUPDATE_SHMEM
 	depends on SHMEM
 	default LIVEUPDATE
 	help
-	  Enable live update support for shmem files, i.e. memfds created
-	  without MFD_HUGETLB. This allows preserving memfd-backed memory
-	  across kernel live updates.
+	  Enable live update support for shmem files: memfds created without
+	  MFD_HUGETLB and files on tmpfs mounts. This allows preserving their
+	  contents across kernel live updates.
 
 	  This can be used to back VM memory with memfds, allowing the guest
 	  memory to persist, or for other user workloads needing to preserve
