@@ -390,13 +390,10 @@ static void shmem_luo_finish(struct liveupdate_file_op_args *args)
 	struct shmem_luo_ser *ser;
 
 	/*
-	 * If retrieve was successful, nothing to do. If it failed, retrieve()
-	 * already cleaned up everything it could. So nothing to do there
-	 * either. Only need to clean up when retrieve was not called.
+	 * Preserved folios may be in use until the session is finished, so
+	 * retrieve() leaves freeing the preserved state to finish(), whether it
+	 * succeeds or not.
 	 */
-	if (args->retrieve_status)
-		return;
-
 	ser = phys_to_virt(args->serialized_data);
 	if (!ser)
 		return;
@@ -515,9 +512,34 @@ put_folios:
 	return err;
 }
 
-static int shmem_luo_retrieve(struct liveupdate_file_op_args *args)
+/*
+ * Restore the preserved folios into @file. This consumes them even if it fails,
+ * since they are then either in @file or freed, so make sure finish() doesn't
+ * free them again.
+ */
+static int shmem_luo_restore_folios(struct file *file,
+				    struct shmem_luo_ser *ser)
 {
 	struct shmem_luo_folio_ser *folios_ser;
+	u64 nr_folios = ser->nr_folios;
+	int err;
+
+	if (!nr_folios)
+		return 0;
+
+	ser->nr_folios = 0;
+
+	folios_ser = kho_restore_vmalloc(&ser->folios);
+	if (!folios_ser)
+		return -EINVAL;
+
+	err = shmem_luo_retrieve_folios(file, folios_ser, nr_folios);
+	vfree(folios_ser);
+	return err;
+}
+
+static int shmem_luo_retrieve(struct liveupdate_file_op_args *args)
+{
 	struct shmem_luo_ser *ser;
 	struct file *file;
 	int err;
@@ -527,10 +549,8 @@ static int shmem_luo_retrieve(struct liveupdate_file_op_args *args)
 		return -EINVAL;
 
 	/* Make sure the file only has seals supported by this version. */
-	if (ser->seals & ~SHMEM_LUO_ALL_SEALS) {
-		err = -EOPNOTSUPP;
-		goto free_ser;
-	}
+	if (ser->seals & ~SHMEM_LUO_ALL_SEALS)
+		return -EOPNOTSUPP;
 
 	/*
 	 * The seals are preserved. Allow sealing here so they can be added
@@ -539,8 +559,7 @@ static int shmem_luo_retrieve(struct liveupdate_file_op_args *args)
 	file = memfd_alloc_file("", MFD_ALLOW_SEALING);
 	if (IS_ERR(file)) {
 		pr_err("failed to setup file: %pe\n", file);
-		err = PTR_ERR(file);
-		goto free_ser;
+		return PTR_ERR(file);
 	}
 
 	err = memfd_add_seals(file, ser->seals);
@@ -552,28 +571,15 @@ static int shmem_luo_retrieve(struct liveupdate_file_op_args *args)
 	vfs_setpos(file, ser->pos, MAX_LFS_FILESIZE);
 	i_size_write(file_inode(file), ser->size);
 
-	if (ser->nr_folios) {
-		folios_ser = kho_restore_vmalloc(&ser->folios);
-		if (!folios_ser) {
-			err = -EINVAL;
-			goto put_file;
-		}
-
-		err = shmem_luo_retrieve_folios(file, folios_ser, ser->nr_folios);
-		vfree(folios_ser);
-		if (err)
-			goto put_file;
-	}
+	err = shmem_luo_restore_folios(file, ser);
+	if (err)
+		goto put_file;
 
 	args->file = file;
-	kho_restore_free(ser);
-
 	return 0;
 
 put_file:
 	fput(file);
-free_ser:
-	kho_restore_free(ser);
 	return err;
 }
 
