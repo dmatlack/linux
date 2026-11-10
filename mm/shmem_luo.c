@@ -553,6 +553,14 @@ static int shmem_luo_retrieve(struct liveupdate_file_op_args *args)
 		return -EOPNOTSUPP;
 
 	/*
+	 * Nothing consumes the preserved state until the folios are restored
+	 * below. If the retrieve fails before that, leave the state for another
+	 * retrieve, or for finish() to free. The checks above can't succeed on
+	 * a retry, so they fail permanently.
+	 */
+	args->retryable = true;
+
+	/*
 	 * The seals are preserved. Allow sealing here so they can be added
 	 * later.
 	 */
@@ -570,6 +578,9 @@ static int shmem_luo_retrieve(struct liveupdate_file_op_args *args)
 
 	vfs_setpos(file, ser->pos, MAX_LFS_FILESIZE);
 	i_size_write(file_inode(file), ser->size);
+
+	/* The preserved state is consumed from here on. */
+	args->retryable = false;
 
 	err = shmem_luo_restore_folios(file, ser);
 	if (err)
