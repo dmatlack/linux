@@ -16,6 +16,8 @@ TEST_GEN_PROGS_EXTENDED += luo_stress_files
 
 TEST_FILES += do_kexec.sh
 
+TEST_GEN_MODS_DIR := modules
+
 include ../lib.mk
 include lib/libliveupdate.mk
 
