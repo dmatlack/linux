@@ -1,6 +1,13 @@
 # SPDX-License-Identifier: GPL-2.0-only
 
+# With NOLIBC=1, build the tests that run across kexec, and the init process
+# that runs them, as static binaries against nolibc. vmtest.sh uses this to
+# build the initrds for its VMs.
+ifeq ($(NOLIBC),)
 TEST_GEN_PROGS += liveupdate
+else
+TEST_GEN_FILES += init
+endif
 
 TEST_GEN_PROGS_EXTENDED += luo_kexec_simple
 TEST_GEN_PROGS_EXTENDED += luo_multi_session
@@ -12,6 +19,9 @@ TEST_FILES += do_kexec.sh
 include ../lib.mk
 include lib/libliveupdate.mk
 
+ifneq ($(NOLIBC),)
+CFLAGS += -static -nostdlib -nostdinc -I$(top_srcdir)/tools/include/nolibc
+endif
 CFLAGS += $(KHDR_INCLUDES)
 CFLAGS += -Wall -O2 -Wno-unused-function
 CFLAGS += -MD

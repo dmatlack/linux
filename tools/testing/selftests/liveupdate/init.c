@@ -115,7 +115,8 @@ static int run_test(int stage)
 		_exit(1);
 	}
 
-	waitpid(pid, &status, 0);
+	if (waitpid(pid, &status, 0) < 0)
+		return -1;
 
 	return (WIFEXITED(status) && WEXITSTATUS(status) == 0) ? 0 : -1;
 }
@@ -144,7 +145,6 @@ static int get_current_stage(void)
 int main(int argc, char *argv[])
 {
 	int current_stage;
-	int err;
 
 	if (mount_filesystems())
 		goto err_reboot;
