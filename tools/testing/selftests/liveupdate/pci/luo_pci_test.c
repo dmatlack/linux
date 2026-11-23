@@ -11,8 +11,9 @@
  *   lupci.control_changes=<reg>[,...]  Optional. Registers that must change
  *                                      across the Live Update on bridges above
  *                                      control endpoints (and not above
- *                                      preserved endpoints): "ari" for ARI
- *                                      Forwarding Enable.
+ *                                      preserved endpoints): "acs" for the ACS
+ *                                      controls, "ari" for ARI Forwarding
+ *                                      Enable.
  *   lupci.marker=<bdf>                 Optional device whose config space is
  *                                      written to mark the phases of the test
  *                                      in a QEMU trace of config writes.
@@ -599,6 +600,10 @@ static void check_devices(const char *when, const struct pci_snapshot *taken)
 				check(!(now.command & PCI_COMMAND_MASTER),
 				      "%s: Bus Master still enabled on control device",
 				      dev->bdf);
+			if (dev->bridge && dev->acs && control_changes("acs"))
+				check(now.acs_ctrl != dev->acs_ctrl,
+				      "%s: ACS controls did not change (0x%04x)",
+				      dev->bdf, now.acs_ctrl);
 			if (dev->bridge && dev->pcie && control_changes("ari"))
 				check((now.devctl2 ^ dev->devctl2) & PCI_EXP_DEVCTL2_ARI,
 				      "%s: ARI Forwarding Enable did not change (DEVCTL2 0x%04x)",
