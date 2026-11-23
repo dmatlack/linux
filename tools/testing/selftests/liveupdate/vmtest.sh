@@ -25,6 +25,8 @@ KEEP_WORKSPACE=0
 #                        tests with different Kconfigs don't share a build
 #   TEST_QEMU_ARGS       Extra QEMU arguments
 #   TEST_CMDLINE         Extra command line for both kernels
+#   TEST_CMDLINE_STAGE1  Extra command line for the first kernel only
+#   TEST_CMDLINE_STAGE2  Extra command line for the kexec'd kernel only
 #   TEST_TIMEOUT         Timeout for the QEMU run
 #   test_check()         Host-side check, run after the test passes in the VM
 TEST_BINARY=""
@@ -33,6 +35,8 @@ TEST_MODULES=()
 TEST_BUILD_NAME=""
 TEST_QEMU_ARGS=()
 TEST_CMDLINE=""
+TEST_CMDLINE_STAGE1=""
+TEST_CMDLINE_STAGE2=""
 TEST_TIMEOUT="30s"
 
 function test_check() {
@@ -166,6 +170,7 @@ function mkinitrd() {
 	local build_dir=$1
 	local kernel_path=$2
 	local make_cmd=$3
+	local cmdline_stage2=$4
 	local output="$workspace_dir/build"
 	local init="$output/init"
 	local test_binary="$output/$TEST_BINARY"
@@ -213,6 +218,13 @@ file /initrd.img $workspace_dir/inner_initrd.cpio 0644 0 0
 EOF
 	cat "$extra_files" >> "$workspace_dir/cpio_list"
 
+	# Only the first kernel needs the command line for the kexec'd kernel
+	if [ -n "$cmdline_stage2" ]; then
+		echo "$cmdline_stage2" > "$workspace_dir/cmdline_stage2"
+		echo "file /cmdline_stage2 $workspace_dir/cmdline_stage2 0644 0 0" \
+			>> "$workspace_dir/cpio_list"
+	fi
+
 	# Generate the final initrd
 	"$build_dir/scripts/gen_init_cpio" "$workspace_dir/cpio_list" > "$initrd"
 }
@@ -222,8 +234,6 @@ function run_qemu() {
 	local cmdline=$2
 	local kernel_path=$3
 	local serial="$workspace_dir/qemu.serial"
-
-	cmdline="$cmdline liveupdate=on panic=-1 $TEST_CMDLINE"
 
 	echo "# Serial Log: $serial"
 	timeout "$TEST_TIMEOUT" \
@@ -310,9 +320,17 @@ function main() {
 	build_kernel "$build_dir" "$make_cmd_build" "$KERNEL_IMAGE" "$target"
 
 	local final_kernel="$build_dir/arch/$arch/boot/$KERNEL_IMAGE"
-	mkinitrd "$build_dir" "$final_kernel" "$make_cmd"
+	local cmdline="$KERNEL_CMDLINE liveupdate=on panic=-1 $TEST_CMDLINE"
+	local cmdline_stage2=""
 
-	run_qemu "$QEMU_CMD" "$KERNEL_CMDLINE" "$final_kernel"
+	# By default, the kexec'd kernel reuses the first kernel's command line
+	if [ -n "$TEST_CMDLINE_STAGE1$TEST_CMDLINE_STAGE2" ]; then
+		cmdline_stage2="$cmdline $TEST_CMDLINE_STAGE2"
+	fi
+
+	mkinitrd "$build_dir" "$final_kernel" "$make_cmd" "$cmdline_stage2"
+
+	run_qemu "$QEMU_CMD" "$cmdline $TEST_CMDLINE_STAGE1" "$final_kernel"
 	ktap_test_pass "$test_name succeeded"
 }
 
