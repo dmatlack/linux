@@ -19,6 +19,8 @@ KEEP_WORKSPACE=0
 #
 #   TEST_BINARY          Test binary to run, as named in the Makefile
 #   TEST_KCONFIGS        Extra Kconfig fragments, relative to $test_dir
+#   TEST_MODULES         Kernel modules to place at /<module>.ko in the
+#                        initrd, built from the Makefile's TEST_GEN_MODS_DIR
 #   TEST_BUILD_NAME      Suffix of the default kernel build directory, so that
 #                        tests with different Kconfigs don't share a build
 #   TEST_QEMU_ARGS       Extra QEMU arguments
@@ -27,6 +29,7 @@ KEEP_WORKSPACE=0
 #   test_check()         Host-side check, run after the test passes in the VM
 TEST_BINARY=""
 TEST_KCONFIGS=()
+TEST_MODULES=()
 TEST_BUILD_NAME=""
 TEST_QEMU_ARGS=()
 TEST_CMDLINE=""
@@ -152,6 +155,11 @@ function build_kernel() {
 
 	$make_cmd "$kimage"
 	$make_cmd headers_install INSTALL_HDR_PATH="$headers_dir"
+
+	# External modules need Module.symvers
+	if [ ${#TEST_MODULES[@]} -gt 0 ]; then
+		$make_cmd modules
+	fi
 }
 
 function mkinitrd() {
@@ -161,10 +169,24 @@ function mkinitrd() {
 	local output="$workspace_dir/build"
 	local init="$output/init"
 	local test_binary="$output/$TEST_BINARY"
+	local extra_files="$workspace_dir/cpio_list_extra"
+	local module ko
 
 	# Build the test binary and the init process
 	$make_cmd -C "$test_dir" NOLIBC=1 OUTPUT="$output" \
 		KHDR_INCLUDES="-I$headers_dir/include" "$init" "$test_binary"
+
+	# Build the test modules against the test kernel, and place the ones
+	# the test needs in both initrds
+	: > "$extra_files"
+	if [ ${#TEST_MODULES[@]} -gt 0 ]; then
+		$make_cmd -C "$test_dir" KDIR="$build_dir" MO="$output/modules" gen_mods_dir
+	fi
+	for module in "${TEST_MODULES[@]}"; do
+		ko="$output/modules/$module.ko"
+		[ -f "$ko" ] || fail "Module $module was not built"
+		echo "file /$module.ko $ko 0644 0 0" >> "$extra_files"
+	done
 
 	cat > "$workspace_dir/cpio_list_inner" <<EOF
 dir /dev 0755 0 0
@@ -174,6 +196,7 @@ nod /dev/console 0600 0 0 c 5 1
 file /init $init 0755 0 0
 file /test_binary $test_binary 0755 0 0
 EOF
+	cat "$extra_files" >> "$workspace_dir/cpio_list_inner"
 
 	# Generate inner_initrd.cpio
 	"$build_dir/scripts/gen_init_cpio" "$workspace_dir/cpio_list_inner" > "$workspace_dir/inner_initrd.cpio"
@@ -188,6 +211,7 @@ file /kernel $kernel_path 0644 0 0
 file /test_binary $test_binary 0755 0 0
 file /initrd.img $workspace_dir/inner_initrd.cpio 0644 0 0
 EOF
+	cat "$extra_files" >> "$workspace_dir/cpio_list"
 
 	# Generate the final initrd
 	"$build_dir/scripts/gen_init_cpio" "$workspace_dir/cpio_list" > "$initrd"
