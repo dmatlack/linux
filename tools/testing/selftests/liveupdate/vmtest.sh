@@ -134,29 +134,22 @@ function mkinitrd() {
 	local build_dir=$1
 	local kernel_path=$2
 	local test_name=$3
+	local make_cmd=$4
+	local output="$workspace_dir/build"
+	local init="$output/init"
+	local test_binary="$output/$test_name"
 
-	# Compile the test binary and the init process
-	"$CROSS_COMPILE"gcc -static -O2 -nostdinc -nostdlib \
-		-I "$headers_dir/include" \
-		-I "$kernel_dir/tools/include/nolibc" \
-		-I "$test_dir/lib/include" \
-		-o "$workspace_dir/test_binary" \
-		"$test_dir/$test_name.c" "$test_dir/lib/lu_utils.c"
-
-	"$CROSS_COMPILE"gcc -s -static -Os -nostdinc -nostdlib		\
-			-fno-asynchronous-unwind-tables -fno-ident	\
-			-fno-stack-protector				\
-			-I "$headers_dir/include"			\
-			-I "$kernel_dir/tools/include/nolibc"		\
-			-o "$workspace_dir/init" "$test_dir/init.c"
+	# Build the test binary and the init process
+	$make_cmd -C "$test_dir" NOLIBC=1 OUTPUT="$output" \
+		KHDR_INCLUDES="-I$headers_dir/include" "$init" "$test_binary"
 
 	cat > "$workspace_dir/cpio_list_inner" <<EOF
 dir /dev 0755 0 0
 dir /proc 0755 0 0
 dir /debugfs 0755 0 0
 nod /dev/console 0600 0 0 c 5 1
-file /init $workspace_dir/init 0755 0 0
-file /test_binary $workspace_dir/test_binary 0755 0 0
+file /init $init 0755 0 0
+file /test_binary $test_binary 0755 0 0
 EOF
 
 	# Generate inner_initrd.cpio
@@ -167,9 +160,9 @@ dir /dev 0755 0 0
 dir /proc 0755 0 0
 dir /debugfs 0755 0 0
 nod /dev/console 0600 0 0 c 5 1
-file /init $workspace_dir/init 0755 0 0
+file /init $init 0755 0 0
 file /kernel $kernel_path 0644 0 0
-file /test_binary $workspace_dir/test_binary 0755 0 0
+file /test_binary $test_binary 0755 0 0
 file /initrd.img $workspace_dir/inner_initrd.cpio 0644 0 0
 EOF
 
@@ -262,7 +255,7 @@ function main() {
 	build_kernel "$build_dir" "$make_cmd_build" "$KERNEL_IMAGE" "$target"
 
 	local final_kernel="$build_dir/arch/$arch/boot/$KERNEL_IMAGE"
-	mkinitrd "$build_dir" "$final_kernel" "$test_name"
+	mkinitrd "$build_dir" "$final_kernel" "$test_name" "$make_cmd"
 
 	run_qemu "$QEMU_CMD" "$KERNEL_CMDLINE" "$final_kernel"
 	ktap_test_pass "$test_name succeeded"
