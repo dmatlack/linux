@@ -52,6 +52,22 @@ function pci_root_port() {
 	TEST_QEMU_ARGS+=(-device "pcie-root-port,id=$1,bus=pcie.0,addr=$2,chassis=$PCI_CHASSIS")
 }
 
+# pci_switch <id> <bus> <downstream_id>...
+#   Add a switch below <bus>, with one downstream port per <downstream_id>. The
+#   downstream ports are devices 0, 1, ... on the switch's internal bus.
+function pci_switch() {
+	local id=$1 bus=$2 i=0 dsp
+	shift 2
+
+	TEST_QEMU_ARGS+=(-device "x3130-upstream,id=$id,bus=$bus,addr=0")
+	for dsp in "$@"; do
+		PCI_CHASSIS=$((PCI_CHASSIS + 1))
+		TEST_QEMU_ARGS+=(-device
+			"xio3130-downstream,id=$dsp,bus=$id,addr=$i,chassis=$PCI_CHASSIS,slot=0")
+		i=$((i + 1))
+	done
+}
+
 # pci_igb <id> <bus> [<addr>]
 #   Add an IGB endpoint at device <addr> (default 0) on <bus>.
 function pci_igb() {
@@ -83,6 +99,19 @@ function pci_topology_root_ports() {
 
 	pci_preserve 0000:00:02.0/00.0
 	pci_control 0000:00:03.0/00.0
+}
+
+# pci_topology_switch
+#   A switch below a root port, with an endpoint to preserve and a control
+#   endpoint below different downstream ports.
+function pci_topology_switch() {
+	pci_root_port rp1 0x2
+	pci_switch sw1 rp1 dsp1 dsp2
+	pci_igb igb1 dsp1
+	pci_igb igb2 dsp2
+
+	pci_preserve 0000:00:02.0/00.0/00.0/00.0
+	pci_control 0000:00:02.0/00.0/01.0/00.0
 }
 
 function test_check() {
